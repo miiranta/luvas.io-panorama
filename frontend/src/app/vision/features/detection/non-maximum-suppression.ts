@@ -16,7 +16,16 @@ function isLocalMaximum(
     y: number,
     radius: number,
 ): boolean {
-    const value = response[y * width + x];
+    const index = y * width + x;
+    const value = response[index];
+    if (
+        response[index - 1] > value ||
+        response[index + 1] > value ||
+        response[index - width] > value ||
+        response[index + width] > value
+    ) {
+        return false;
+    }
     const x0 = Math.max(0, x - radius);
     const x1 = Math.min(width - 1, x + radius);
     const y1 = Math.min(height - 1, y + radius);

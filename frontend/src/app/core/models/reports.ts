@@ -124,6 +124,7 @@ export interface MosaicPayload {
     fillPercent: number;
     spanHorizontal: number;
     spanVertical: number;
+    dropped: number;
     focal: number;
     distortion: number;
     vignetting: number;

@@ -287,6 +287,7 @@ export class StitchPipeline {
             fillPercent: this.compositor.coveragePercent(),
             spanHorizontal: span.horizontal,
             spanVertical: span.vertical,
+            dropped: this.frames.all.length - this.frameCount,
             focal: this.cameras.focal ?? 0,
             distortion: this.cameras.distortion,
             vignetting: this.compositor.vignetting,

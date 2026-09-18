@@ -8,6 +8,7 @@ let queue: Promise<void> = Promise.resolve();
 let pending = 0;
 let stale = false;
 let settleTimer: number | null = null;
+let queuedRecomposes = 0;
 
 const SETTLE_DELAY = 400;
 
@@ -101,6 +102,8 @@ async function handle(request: WorkerRequest): Promise<void> {
                 break;
             }
             case 'recompose': {
+                queuedRecomposes--;
+                if (queuedRecomposes > 0) break;
                 await pipeline.recompose();
                 publishMosaic();
                 break;
@@ -169,6 +172,7 @@ function scheduleSettle(): void {
 self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
     const request = event.data;
     const counted = tracked(request);
+    if (request.kind === 'recompose') queuedRecomposes++;
     if (counted) {
         if (settleTimer !== null) {
             clearTimeout(settleTimer);

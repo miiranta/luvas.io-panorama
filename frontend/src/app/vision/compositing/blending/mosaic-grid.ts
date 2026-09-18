@@ -110,11 +110,16 @@ export abstract class MosaicGrid {
     }
 
     private markDirty(tile: WarpTile): void {
-        const spansWidth = tile.width >= this.width;
-        const left = spansWidth ? 0 : Math.max(0, this.column(tile.u0));
-        const right = spansWidth ? this.width - 1 : Math.min(this.width - 1, left + tile.width - 1);
+        const runs = this.columnRuns(0, tile.u0, tile.width);
         const top = Math.max(0, tile.v0 - this.originV);
         const bottom = Math.min(this.height - 1, tile.v0 + tile.height - 1 - this.originV);
+        if (runs.length === 0 || bottom < top) return;
+        let left = this.width - 1;
+        let right = 0;
+        for (const run of runs) {
+            left = Math.min(left, run.localStart);
+            right = Math.max(right, run.localStart + run.length - 1);
+        }
         if (!this.dirty) {
             this.dirty = { u0: left, v0: top, u1: right, v1: bottom };
             return;
@@ -129,13 +134,7 @@ export abstract class MosaicGrid {
 
     reset(): void {
         if (!this.dirty) return;
-        const wrapped = this.dirty.u1 >= this.width;
-        const box: CanvasBox = {
-            u0: wrapped ? 0 : Math.max(0, this.dirty.u0),
-            u1: wrapped ? this.width - 1 : Math.min(this.width - 1, this.dirty.u1),
-            v0: Math.max(0, this.dirty.v0),
-            v1: Math.min(this.height - 1, this.dirty.v1),
-        };
+        const box: CanvasBox = { ...this.dirty };
         const span = box.u1 - box.u0 + 1;
         for (let v = box.v0; v <= box.v1; v++) {
             const start = v * this.width + box.u0;

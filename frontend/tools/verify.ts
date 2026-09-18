@@ -19,6 +19,7 @@ import { createCanvasGeometry } from '../src/app/vision/compositing/warping/canv
 import { PoseGraph } from '../src/app/vision/registration/alignment/pose-graph';
 import { fastSegmentTest } from '../src/app/vision/features/detection/fast-segment-test';
 import { Keyframe } from '../src/app/vision/pipeline/keyframe';
+import { CpuMosaic } from '../src/app/vision/compositing/blending/cpu-mosaic';
 
 function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: Uint8Array } {
     const bytes = new Uint8Array(buffer);
@@ -447,6 +448,24 @@ function runUnitChecks(): void {
         1,
         DEFAULT_PARAMS.match,
     );
+    const ring360 = new CpuMosaic(256, 64, 3, { u0: 0, v0: 0, canvasWidth: 256 });
+    ring360.addPyramidBands({
+        u0: 206,
+        v0: 0,
+        width: 200,
+        height: 64,
+        color: new Float32Array(200 * 64 * 3).fill(200),
+        mask: new Float32Array(200 * 64).fill(1),
+        pixels: 200 * 64,
+    });
+    ring360.reset();
+    const leftover = ring360.flatWeight[10 * 256 + 20] + ring360.bandWeight[0][10 * 256 + 20];
+    check(
+        'reset clears a photo that wraps around 360°',
+        leftover === 0 && ring360.coverage[10 * 256 + 20] === 0,
+        `weight left at the wrapped column ${leftover}`,
+    );
+
     check(
         'ratio test needs a second neighbour',
         lonely.length === 1 && !lonely[0].accepted,

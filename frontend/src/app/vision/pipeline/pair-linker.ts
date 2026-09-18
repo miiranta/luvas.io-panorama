@@ -1,4 +1,4 @@
-import { PipelineParams } from '../../core/models/params';
+import { MatchParams, PipelineParams } from '../../core/models/params';
 import { MatchRecord, PairReport } from '../../core/models/reports';
 import { DescriptorMatcher } from '../features/matching/descriptor-matcher';
 import { BundleObservation } from '../registration/alignment/bundle-adjuster';
@@ -46,13 +46,13 @@ export class PairLinker {
         private readonly lens: () => LensModel = () => NO_LENS,
     ) {}
 
-    match(query: Keyframe, train: Keyframe): PairMatch {
+    match(query: Keyframe, train: Keyframe, overrides: Partial<MatchParams> = {}): PairMatch {
         const raw = this.matcher().match(
             query.descriptors,
             query.keypoints.length,
             train.descriptors,
             train.keypoints.length,
-            this.params().match,
+            { ...this.params().match, ...overrides },
         );
         const correspondences: Correspondence[] = [];
         const origin: number[] = [];

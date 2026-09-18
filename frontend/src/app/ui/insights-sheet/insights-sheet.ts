@@ -32,6 +32,7 @@ export class InsightsSheet {
     readonly graph = this.stitcher.graph;
     readonly mosaic = this.stitcher.mosaic;
     readonly last = this.stitcher.lastReport;
+    readonly lastAccepted = this.stitcher.lastAccepted;
 
     readonly nodes = computed<NodeDot[]>(() => {
         const nodes = this.graph().nodes;

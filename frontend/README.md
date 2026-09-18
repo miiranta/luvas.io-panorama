@@ -22,7 +22,7 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm run verify                      # 75 checagens numéricas contra ground truth sintético
+npm run verify                      # 81 checagens numéricas contra ground truth sintético
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
 npm run e2e                         # 28 checagens ponta a ponta em Chrome headless
 ```
@@ -34,8 +34,9 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
 - **Disparador** no centro inferior. À direita, **▯▯** abre a comparação entre a última foto e a
   foto com que ela foi casada, e logo abaixo **↻** reinicia o panorama depois de confirmar num
   diálogo; à esquerda, **⇄** troca de câmera (aparece só quando há mais de um dispositivo).
-- **HUD (topo)** — número de fotos integradas/descartadas e o **ângulo de visão já coberto**
-  (ex. `114° × 45°`), medido da caixa envolvente do mosaico na superfície escolhida.
+- **HUD (topo)** — número de fotos integradas/descartadas. O **ângulo de visão já coberto**
+  (ex. `114° × 45°`, medido da caixa envolvente do mosaico na superfície escolhida) fica no painel
+  de diagnóstico ⓘ.
 - **Minimapa (topo, centro)** — o mosaico recortado na região coberta, atualizado a cada foto;
   toque amplia; **⬇** exporta o PNG e, ampliado, **✕** fecha. Um selo diz o tempo todo que aquilo é
   uma **prévia** (`PREVIEW`); enquanto o worker compõe, o selo vira `COMPOSITING` com um spinner e o
@@ -44,7 +45,8 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
   os controles (HUD, minimapa, disparador, botões) acima das linhas, pela escala única de
   `styles/_layers.scss`.
 - **Rastreamento ao vivo** — a partir da primeira foto, o quadro atual da câmera é casado
-  continuamente (a cada ~260 ms) contra as câmeras já registradas e os pares aparecem desenhados
+  continuamente (a cada quadro novo da câmera, até onde o worker acompanha) contra as câmeras já
+  registradas e os pares aparecem desenhados
   sobre a própria imagem: ponto **rosa** onde a característica está no panorama, ponto **amarelo**
   onde está agora e uma linha ligando os dois. A legenda diz em palavras se dá para fotografar —
   verde `ready to shoot` ou vermelho `not enough overlap` — com a contagem de pontos, o erro em px
@@ -166,7 +168,12 @@ detalhes importam:
   uma otimização óbvia, mas BRIEF não é invariante a escala: a 384 px contra keyframes de 640 px o
   casamento caía de ~52 para ~4 inliers;
 - há no máximo uma requisição de preview em voo e ela é suprimida enquanto uma captura está sendo
-  processada, então o rastreamento nunca atrasa a integração de uma foto.
+  processada, então o rastreamento nunca atrasa a integração de uma foto. Assim que a resposta
+  chega, o próximo quadro novo da câmera já é enviado (laço por `requestAnimationFrame`, um canvas
+  reaproveitado): ~24 atualizações/s com uma câmera de 30 fps;
+- o preview pode **cortar caminho**, a foto final não: o casamento ao vivo pula a checagem cruzada,
+  tenta primeiro a câmera que casou no quadro anterior e para na primeira verificada. As capturas
+  usam o pipeline completo.
 
 ### Aceleração por GPU
 
@@ -214,8 +221,10 @@ alvo do worker) mudaram o desenho:
   shaders endereçam por `texelFetch` com tamanho lógico, e a detecção guarda alocações por tamanho
   de imagem — caiu para 0,12 s. A detecção também devolve gradiente e resposta numa leitura só;
 - **O rastreamento ao vivo ocupava metade do worker**: a extração a cada 260 ms somava 6 s em 18 s.
-  O serviço agora espera 1,5× a latência da última prévia antes de mandar outra, e a prévia usa só o
-  nível 0 da pirâmide.
+  A prévia usa só o nível 0 da pirâmide, casa sem checagem cruzada contra uma câmera por vez, o
+  RANSAC para em C(n, 4)·3 amostras quando há poucos pares, a amostra mínima de 4 pontos é
+  resolvida por um sistema 8×8 exato (o ajuste final nos inliers segue no DLT normalizado com
+  Jacobi) e a NMS testa só a janela dos pixels acima do limiar.
 
 A camada de vetores desenha num canvas `desynchronized` e o vídeo e o overlay são promovidos a
 camadas de composição próprias, para o navegador compor na GPU.
@@ -253,7 +262,7 @@ duplicado.
 ┌───────────────▼──────────────────────────────────────────────┴───────────────┐
 │ Web Worker · StitchPipeline                                                  │
 │                                                                              │
-│   preview (≈4 Hz) ─────────────────────────────┐                             │
+│   preview (cada quadro) ───────────────────────┐                             │
 │                                                ▼                             │
 │   image ─► detect ─────► describe ─────► match ─────► model                  │
 │   cinza    Harris /      BRIEF           força bruta   DLT normalizado       │
@@ -439,10 +448,11 @@ zoom), renderiza vistas com rotação conhecida e confere o pipeline contra o gr
 - objeto móvel detectado como pixels inconsistentes na sobreposição;
 - custo por foto estável com N crescente e no máximo 5 pares avaliados por foto.
 
-`npm run e2e` (28 checagens) sobe o Chrome headless com uma câmera falsa (`--use-file-for-fake-video-capture`
+`npm run e2e` (29 checagens) sobe o Chrome headless com uma câmera falsa (`--use-file-for-fake-video-capture`
 alimentado por um Y4M sintético), clica no disparador 7 vezes e confere no navegador real:
-getUserMedia, acumulação no canvas, HUD com o ângulo coberto, linhas desenhadas sobre a câmera
-(~50 k px pintados), rastreamento ao vivo (6/6 amostras), linhas atrás dos controles e só sobre o vídeo (ordem de
+getUserMedia, acumulação no canvas, HUD com a contagem de fotos, linhas desenhadas sobre a câmera
+(~50 k px pintados), rastreamento ao vivo (6/6 amostras) acompanhando cada quadro da câmera falsa
+(10 atualizações/s a 10 fps), linhas atrás dos controles e só sobre o vídeo (ordem de
 empilhamento conferida), popup de comparação aberto pelo botão (74 inliers, 88 % dos pares,
 0,7 px) com o **✕** inteiro dentro do quadro, **✕** e **⬇** do minimapa ampliado sem
 sobreposição, os cinco aceleradores de fato em WebGL2 (o rótulo precisa começar por `webgl2`),

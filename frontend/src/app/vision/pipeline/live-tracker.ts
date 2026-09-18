@@ -11,6 +11,8 @@ const PREVIEW_CANDIDATES = 3;
 const MIN_PREVIEW_KEYPOINTS = 8;
 
 export class LiveTracker {
+    private lastReference = -1;
+
     constructor(
         private readonly frames: KeyframeStore,
         private readonly features: FeatureExtractor,
@@ -38,16 +40,29 @@ export class LiveTracker {
             null,
             latest.rotation,
         );
-        let best: { frame: Keyframe; pair: FittedPair } | null = null;
-        for (const frame of this.frames.nearest(probe.rotation, PREVIEW_CANDIDATES, anchors)) {
-            const pair = this.linker.match(probe, frame);
+        const nearest = this.frames.nearest(probe.rotation, PREVIEW_CANDIDATES, anchors);
+        const sticky = anchors.find((frame) => frame.id === this.lastReference);
+        const candidates = sticky
+            ? [sticky, ...nearest.filter((frame) => frame !== sticky)]
+            : nearest;
+        let best: { frame: Keyframe; pair: FittedPair; verified: boolean } | null = null;
+        for (const frame of candidates) {
+            const pair = this.linker.match(probe, frame, { crossCheck: false });
             if (!isFitted(pair)) continue;
-            if (!best || pair.fit.inlierCount > best.pair.fit.inlierCount) best = { frame, pair };
+            const accepted = pair.matches.filter((match) => match.accepted).length;
+            const verified = this.linker.verified(pair.fit.inlierCount, accepted, false);
+            if (verified) {
+                best = { frame, pair, verified };
+                break;
+            }
+            if (!best || pair.fit.inlierCount > best.pair.fit.inlierCount) {
+                best = { frame, pair, verified };
+            }
         }
         if (!best) return null;
-        const { frame, pair } = best;
+        const { frame, pair, verified } = best;
+        this.lastReference = frame.id;
         const scale = work.width / frame.workWidth;
-        const accepted = pair.matches.filter((match) => match.accepted).length;
         return {
             width: work.width,
             height: work.height,
@@ -61,7 +76,7 @@ export class LiveTracker {
             })),
             inliers: pair.fit.inlierCount,
             meanError: pair.fit.meanError,
-            verified: this.linker.verified(pair.fit.inlierCount, accepted, false),
+            verified,
         };
     }
 }

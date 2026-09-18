@@ -97,7 +97,7 @@
                         <dd>{{ m.mosaicBackend }}</dd>
                     </div>
                 }
-                @if (last(); as report) {
+                @if (lastAccepted(); as report) {
                     <div>
                         <dt>reprojection</dt>
                         <dd>{{ report.bundleAfter.toFixed(2) }} px</dd>

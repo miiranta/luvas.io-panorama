@@ -45,9 +45,16 @@ export class StitcherService {
     readonly stale = signal(false);
     readonly progress = signal(-1);
 
-    readonly acceptedFrames = computed(() => this.reports().filter((r) => r.accepted).length);
-    readonly rejectedFrames = computed(() => this.reports().filter((r) => !r.accepted).length);
+    readonly acceptedFrames = computed(
+        () => this.mosaic()?.frames ?? this.reports().filter((r) => r.accepted).length,
+    );
+    readonly rejectedFrames = computed(
+        () => this.mosaic()?.dropped ?? this.reports().filter((r) => !r.accepted).length,
+    );
     readonly lastReport = computed(() => this.reports().at(-1) ?? null);
+    readonly lastAccepted = computed(
+        () => [...this.reports()].reverse().find((report) => report.accepted) ?? null,
+    );
     readonly composing = computed(() => this.working() || this.stale());
     readonly exportReady = computed(
         () => this.mosaic() !== null && !this.composing() && this.acceptedFrames() > 0,
@@ -95,6 +102,7 @@ export class StitcherService {
                 if (message.epoch !== this.epoch) break;
                 this.previewInFlight = false;
                 this.preview.set(message.preview);
+                this.tickPreview();
                 break;
             }
             case 'state':
