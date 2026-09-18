@@ -1,0 +1,6 @@
+services:
+  panorama:
+    build: .
+    ports:
+      - '7120:7120'
+    restart: unless-stopped
