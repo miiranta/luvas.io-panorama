@@ -1,0 +1,120 @@
+<div class="backdrop" (click)="close.emit()"></div>
+
+<section class="sheet">
+    <header>
+        <h2>Diagnóstico</h2>
+        <button type="button" class="link" (click)="resolve()">reordenar</button>
+        <button type="button" class="round-action close" title="Fechar" (click)="close.emit()">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                    d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.8"
+                    stroke-linecap="round"
+                />
+            </svg>
+        </button>
+    </header>
+
+    <div class="body">
+        @if (graph().nodes.length > 0) {
+            <svg viewBox="0 0 100 100" aria-label="Grafo de vizinhança">
+                @for (edge of edges(); track $index) {
+                    <line
+                        [attr.x1]="edge.x1"
+                        [attr.y1]="edge.y1"
+                        [attr.x2]="edge.x2"
+                        [attr.y2]="edge.y2"
+                        [attr.stroke-width]="edge.width"
+                        [class.tree]="edge.inTree"
+                    />
+                }
+                @for (node of nodes(); track node.id) {
+                    <g [class.out]="node.rejected" [class.ref]="node.reference">
+                        <circle [attr.cx]="node.x" [attr.cy]="node.y" r="3.8" />
+                        <text [attr.x]="node.x" [attr.y]="node.y + 1.3">{{ node.label }}</text>
+                    </g>
+                }
+            </svg>
+
+            <dl>
+                <div>
+                    <dt>ordem</dt>
+                    <dd>{{ order() || '—' }}</dd>
+                </div>
+                @if (dropped()) {
+                    <div>
+                        <dt>fora</dt>
+                        <dd class="bad">{{ dropped() }}</dd>
+                    </div>
+                }
+                @if (mosaic(); as m) {
+                    <div>
+                        <dt>ângulo</dt>
+                        <dd>
+                            {{ m.spanHorizontal.toFixed(0) }}° × {{ m.spanVertical.toFixed(0) }}°
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>preenchido</dt>
+                        <dd>{{ m.fillPercent.toFixed(1) }}%</dd>
+                    </div>
+                    <div>
+                        <dt>focal</dt>
+                        <dd>{{ m.focal.toFixed(0) }} px</dd>
+                    </div>
+                    <div>
+                        <dt>memória</dt>
+                        <dd>{{ (m.storedBytes / 1048576).toFixed(1) }} MB</dd>
+                    </div>
+                    <div>
+                        <dt>mistura</dt>
+                        <dd>{{ m.blurBackend }}</dd>
+                    </div>
+                    <div>
+                        <dt>casamento</dt>
+                        <dd>{{ m.matchBackend }}</dd>
+                    </div>
+                    <div>
+                        <dt>detecção</dt>
+                        <dd>{{ m.detectBackend }}</dd>
+                    </div>
+                }
+                @if (last(); as report) {
+                    <div>
+                        <dt>reprojeção</dt>
+                        <dd>{{ report.bundleAfter.toFixed(2) }} px</dd>
+                    </div>
+                }
+                @if (ghosts() !== null) {
+                    <div>
+                        <dt>fantasmas</dt>
+                        <dd>{{ ghosts()!.toFixed(1) }}%</dd>
+                    </div>
+                }
+            </dl>
+
+            @if (timings(); as stages) {
+                <div class="bars">
+                    @for (stage of stages; track stage.name) {
+                        <div class="bar">
+                            <span>{{ stage.name }}</span>
+                            <span class="track">
+                                <span
+                                    class="fill"
+                                    [style.width.%]="
+                                        (stage.value / (last()!.timings.total || 1)) * 100
+                                    "
+                                ></span>
+                            </span>
+                            <b>{{ stage.value.toFixed(0) }}</b>
+                        </div>
+                    }
+                </div>
+            }
+        } @else {
+            <p class="empty">Sem fotos ainda.</p>
+        }
+    </div>
+</section>

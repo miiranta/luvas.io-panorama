@@ -1,0 +1,34 @@
+<app-camera-stage
+    (openSettings)="openSheet('settings')"
+    (openInsights)="openSheet('insights')"
+    (requestReset)="askingReset.set(true)"
+    (openMatch)="openSheet('match')"
+/>
+
+<app-tracks-layer />
+
+<app-panorama-layer [expanded]="minimapExpanded()" (toggle)="toggleMinimap()" />
+
+@if (sheet() === 'settings') {
+    <app-settings-sheet (close)="openSheet('none')" />
+}
+
+@if (sheet() === 'insights') {
+    <app-insights-sheet (close)="openSheet('none')" />
+}
+
+@if (sheet() === 'match') {
+    <app-match-dialog (close)="openSheet('none')" />
+}
+
+@if (askingReset()) {
+    <app-confirm-dialog
+        message="Reiniciar o panorama?"
+        [detail]="frames() + ' foto(s) e o mosaico atual serão descartados.'"
+        confirmLabel="Reiniciar"
+        (confirmed)="confirmReset()"
+        (dismissed)="askingReset.set(false)"
+    />
+}
+
+<app-busy-veil />

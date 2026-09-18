@@ -1,0 +1,71 @@
+<div class="backdrop" (click)="close.emit()"></div>
+
+<section class="sheet">
+    <header>
+        <h2>Parâmetros</h2>
+        <button type="button" class="link" (click)="reset()">padrões</button>
+        <button type="button" class="round-action close" title="Fechar" (click)="close.emit()">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                    d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.8"
+                    stroke-linecap="round"
+                />
+            </svg>
+        </button>
+    </header>
+
+    <div class="body">
+        @for (group of groups(); track group.group) {
+            <h3>{{ group.title }}</h3>
+            <div class="grid">
+                @for (spec of group.specs; track spec.key) {
+                    <div class="row" [title]="spec.hint">
+                        <span class="label">{{ spec.label }}</span>
+                        @switch (spec.kind) {
+                            @case ('range') {
+                                <input
+                                    type="range"
+                                    [min]="spec.min"
+                                    [max]="spec.max"
+                                    [step]="spec.step"
+                                    [value]="asNumber(spec)"
+                                    (input)="onRange(spec, $event)"
+                                />
+                                <output>{{ shown(spec) }}</output>
+                            }
+                            @case ('choice') {
+                                <select (change)="onChoice(spec, $event)">
+                                    @for (option of spec.options; track option) {
+                                        <option
+                                            [value]="option"
+                                            [selected]="option === asText(spec)"
+                                        >
+                                            {{ option }}
+                                        </option>
+                                    }
+                                </select>
+                            }
+                            @case ('toggle') {
+                                <button
+                                    type="button"
+                                    class="switch"
+                                    [class.on]="asBool(spec)"
+                                    (click)="onToggle(spec)"
+                                ></button>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <footer>
+        <button type="button" class="link" (click)="showAdvanced.set(!showAdvanced())">
+            {{ showAdvanced() ? 'menos opções' : 'mais opções' }}
+        </button>
+    </footer>
+</section>

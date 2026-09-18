@@ -1,0 +1,119 @@
+import { ModelParams } from '../../core/models/params';
+import { Mat3 } from '../math/matrix3';
+import {
+    Correspondence,
+    MIN_PAIRS,
+    fitModel,
+    isPlausibleHomography,
+    transferError,
+} from './transform-model';
+
+export interface ModelFit {
+    matrix: Mat3;
+    inliers: Uint8Array;
+    inlierCount: number;
+    meanError: number;
+}
+
+export class RansacEstimator {
+    constructor(
+        private readonly params: ModelParams,
+        private readonly random: () => number = Math.random,
+    ) {}
+
+    fit(points: readonly Correspondence[]): ModelFit | null {
+        const params = this.params;
+        const kind = params.model;
+        const sampleSize = MIN_PAIRS[kind];
+        if (points.length < sampleSize) return null;
+        const threshold = params.ransacThreshold;
+        let bestInliers: Uint8Array | null = null;
+        let bestCount = 0;
+        let bestError = Number.POSITIVE_INFINITY;
+        let bestMatrix: Mat3 | null = null;
+        let maxIterations = params.ransacMaxIterations;
+        const indices = new Array<number>(sampleSize);
+        let iteration = 0;
+        while (iteration < maxIterations) {
+            iteration++;
+            for (let s = 0; s < sampleSize; s++) {
+                let candidate = 0;
+                let unique = false;
+                while (!unique) {
+                    candidate = Math.floor(this.random() * points.length);
+                    unique = true;
+                    for (let t = 0; t < s; t++) if (indices[t] === candidate) unique = false;
+                }
+                indices[s] = candidate;
+            }
+            const model = fitModel(kind, points, indices);
+            if (!model || !isPlausibleHomography(model, kind, params.rejectSkew)) continue;
+            let count = 0;
+            let error = 0;
+            const inliers = new Uint8Array(points.length);
+            for (let i = 0; i < points.length; i++) {
+                const e = transferError(model, points[i]);
+                if (e <= threshold) {
+                    inliers[i] = 1;
+                    count++;
+                    error += e;
+                }
+            }
+            if (
+                count > bestCount ||
+                (count === bestCount && error / Math.max(1, count) < bestError)
+            ) {
+                bestCount = count;
+                bestInliers = inliers;
+                bestMatrix = model;
+                bestError = error / Math.max(1, count);
+                const w = count / points.length;
+                if (w > 0 && w < 1) {
+                    const denom = Math.log(1 - Math.pow(w, sampleSize));
+                    if (denom < -1e-12) {
+                        const needed = Math.ceil(Math.log(1 - params.ransacConfidence) / denom);
+                        maxIterations = Math.min(
+                            params.ransacMaxIterations,
+                            Math.max(needed, sampleSize * 4),
+                        );
+                    }
+                } else if (w >= 1) {
+                    maxIterations = Math.min(maxIterations, iteration);
+                }
+            }
+        }
+        if (!bestMatrix || !bestInliers) return null;
+        let matrix = bestMatrix;
+        let inliers = bestInliers;
+        let count = bestCount;
+        if (params.refitOnInliers && count >= sampleSize) {
+            const inlierIndices: number[] = [];
+            for (let i = 0; i < inliers.length; i++) if (inliers[i]) inlierIndices.push(i);
+            const refined = fitModel(kind, points, inlierIndices);
+            if (refined && isPlausibleHomography(refined, kind, params.rejectSkew)) {
+                const nextInliers = new Uint8Array(points.length);
+                let nextCount = 0;
+                for (let i = 0; i < points.length; i++) {
+                    if (transferError(refined, points[i]) <= threshold) {
+                        nextInliers[i] = 1;
+                        nextCount++;
+                    }
+                }
+                if (nextCount >= count) {
+                    matrix = refined;
+                    inliers = nextInliers;
+                    count = nextCount;
+                }
+            }
+        }
+        let errorSum = 0;
+        for (let i = 0; i < points.length; i++)
+            if (inliers[i]) errorSum += transferError(matrix, points[i]);
+        return {
+            matrix,
+            inliers,
+            inlierCount: count,
+            meanError: count === 0 ? Number.POSITIVE_INFINITY : errorSum / count,
+        };
+    }
+}

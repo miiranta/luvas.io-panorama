@@ -1,0 +1,68 @@
+@use 'layers';
+
+:host {
+    position: absolute;
+    top: 0.75rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(34vw, 300px);
+    z-index: layers.$minimap;
+}
+
+:host(.expanded) {
+    top: 50%;
+    width: min(94vw, 1400px);
+    transform: translate(-50%, -50%);
+}
+
+.minimap {
+    position: relative;
+    padding: 5px;
+    border: 4px solid var(--outline);
+    border-radius: var(--radius);
+    background: rgb(23 16 46 / 90%);
+    box-shadow: var(--pop-lg);
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+}
+
+canvas {
+    display: block;
+    width: 100%;
+    height: 74px;
+    object-fit: contain;
+    border-radius: 12px;
+    background: repeating-conic-gradient(#1d1440 0% 25%, #241a4f 0% 50%) 50% / 12px 12px;
+    outline: 2px solid var(--outline);
+    outline-offset: -1px;
+}
+
+:host(.expanded) canvas {
+    height: auto;
+    max-height: 76vh;
+}
+
+.meta {
+    position: absolute;
+    right: 0.6rem;
+    bottom: 0.5rem;
+    padding: 0.08rem 0.5rem;
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    color: var(--text);
+    background: rgb(13 8 32 / 94%);
+    border: 2px solid var(--outline);
+    border-radius: 999px;
+}
+
+@media (max-width: 720px) {
+    :host {
+        top: 4.2rem;
+        width: min(74vw, 320px);
+    }
+
+    :host(.expanded) {
+        top: 50%;
+        width: min(94vw, 1400px);
+    }
+}
