@@ -1,78 +1,15 @@
-import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { openChrome } from './devtools.mjs';
 
 const APP_URL = process.env.APP_URL ?? 'http://localhost:4173';
 const VIDEO = process.env.FAKE_VIDEO ?? '/tmp/pano.y4m';
 const SHOTS = Number(process.env.SHOTS ?? 8);
-const profile = mkdtempSync(join(tmpdir(), 'chrome-prof-'));
-const args = [
-    '--headless=new',
-    '--remote-debugging-port=9334',
-    `--user-data-dir=${profile}`,
-    '--no-first-run',
-    '--window-size=1280,900',
-    '--use-fake-ui-for-media-stream',
-    '--use-fake-device-for-media-stream',
-    `--use-file-for-fake-video-capture=${VIDEO}`,
-    '--autoplay-policy=no-user-gesture-required',
-];
-if (process.env.SOFTWARE_GL === '1') {
-    args.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
-} else {
-    args.push('--use-angle=gl', '--enable-gpu');
-}
-args.push('about:blank');
-const chrome = spawn('google-chrome', args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-async function endpoint() {
-    for (let attempt = 0; attempt < 80; attempt++) {
-        try {
-            const response = await fetch('http://127.0.0.1:9334/json/version');
-            return (await response.json()).webSocketDebuggerUrl;
-        } catch {
-            await new Promise((r) => setTimeout(r, 250));
-        }
-    }
-    throw new Error('devtools unavailable');
-}
-
-const socket = new WebSocket(await endpoint());
-await new Promise((resolve) => socket.addEventListener('open', resolve, { once: true }));
-let nextId = 1;
-const pending = new Map();
-socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data);
-    if (message.id && pending.has(message.id)) {
-        const { resolve, reject } = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error) reject(new Error(JSON.stringify(message.error)));
-        else resolve(message.result);
-    }
+const { call, evaluate, close } = await openChrome({
+    name: 'profile',
+    port: 9334,
+    video: VIDEO,
+    softwareGl: process.env.SOFTWARE_GL === '1',
 });
-const send = (method, params = {}, sessionId) =>
-    new Promise((resolve, reject) => {
-        const id = nextId++;
-        pending.set(id, { resolve, reject });
-        socket.send(JSON.stringify({ id, method, params, sessionId }));
-    });
-
-const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
-const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-const call = (m, p) => send(m, p, sessionId);
-await call('Page.enable');
-await call('Runtime.enable');
-
-const evaluate = async (expression) => {
-    const result = await call('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-    });
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
-    return result.result.value;
-};
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 await call('Page.navigate', { url: APP_URL });
@@ -197,5 +134,4 @@ for (const [name, run] of [
     console.log(`  stages (ms, mean) ${JSON.stringify(average(run.samples.slice(0, common)))}`);
 }
 
-socket.close();
-chrome.kill('SIGKILL');
+close();

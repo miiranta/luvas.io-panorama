@@ -2,6 +2,7 @@ import { GlobalParams } from '../../core/models/params';
 import { BundleAdjuster, BundleObservation } from '../registration/alignment/bundle-adjuster';
 import { relativeRotationFromHomography } from '../registration/alignment/rotational-camera';
 import { Mat3, mat3Multiply, mat3Transpose } from '../foundation/math/matrix3';
+import { median } from '../foundation/math/median';
 import { Keyframe } from './keyframe';
 import { LinkRegistry } from './link-registry';
 import { PairLink } from './pair-link';
@@ -47,34 +48,43 @@ export class CameraSolver {
         );
     }
 
-    initialise(frame: Keyframe): void {
+    initialize(frame: Keyframe): void {
         this.focalEstimate ??= this.focalFor(frame);
     }
 
-    absorbFocals(links: readonly PairLink[], frame: Keyframe, blend: boolean): void {
-        if (!blend) this.focalRefined = false;
-        if (blend && this.focalRefined) return;
-        const focals = links
-            .filter((link) => link.verified && link.focal !== null)
-            .map((link) => link.focal as number)
-            .sort((a, b) => a - b);
-        if (this.params().autoFocal && focals.length > 0) {
-            const median = focals[Math.floor(focals.length / 2)];
-            this.focalEstimate =
-                blend && this.focalEstimate !== null
-                    ? this.focalEstimate * FOCAL_MEMORY + median * (1 - FOCAL_MEMORY)
-                    : median;
-        } else {
-            this.initialise(frame);
+    blendFocals(links: readonly PairLink[], frame: Keyframe): void {
+        if (this.focalRefined) return;
+        const measured = this.linkFocal(links);
+        if (measured === null) {
+            this.initialize(frame);
+            return;
         }
+        this.focalEstimate =
+            this.focalEstimate === null
+                ? measured
+                : this.focalEstimate * FOCAL_MEMORY + measured * (1 - FOCAL_MEMORY);
+    }
+
+    restartFocal(links: readonly PairLink[], frame: Keyframe): void {
+        this.focalRefined = false;
+        const measured = this.linkFocal(links);
+        if (measured === null) this.initialize(frame);
+        else this.focalEstimate = measured;
+    }
+
+    private linkFocal(links: readonly PairLink[]): number | null {
+        if (!this.params().autoFocal) return null;
+        return median(
+            links.flatMap((link) => (link.verified && link.focal !== null ? [link.focal] : [])),
+        );
     }
 
     placeRelativeTo(frame: Keyframe, parent: Keyframe, link: PairLink): Mat3 {
         const relative = relativeRotationFromHomography(
             link.matrix,
             this.focalFor(frame),
-            frame.centreX,
-            frame.centreY,
+            frame.centerX,
+            frame.centerY,
         );
         return link.a === frame.id
             ? mat3Multiply(mat3Transpose(relative), parent.rotation)
@@ -101,8 +111,8 @@ export class CameraSolver {
             rotations: active.map((frame) => Float64Array.from(frame.rotation) as Mat3),
             focal: this.focalFor(reference),
             distortion: this.distortion,
-            cx: reference.centreX,
-            cy: reference.centreY,
+            cx: reference.centerX,
+            cy: reference.centerY,
             observations,
             freeCameras,
             refineFocal: params.refineFocal,

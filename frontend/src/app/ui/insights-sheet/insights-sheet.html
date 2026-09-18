@@ -19,7 +19,7 @@
 
     <div class="body">
         @if (graph().nodes.length > 0) {
-            <svg class="graph" viewBox="0 0 100 100" aria-label="Neighbourhood graph">
+            <svg class="graph" viewBox="0 0 100 100" aria-label="Neighborhood graph">
                 @for (edge of edges(); track $index) {
                     <line
                         [attr.x1]="edge.x1"
@@ -103,10 +103,11 @@
                         <dd>{{ report.bundleAfter.toFixed(2) }} px</dd>
                     </div>
                 }
-                @if (ghosts() !== null) {
+                @let ghosting = ghosts();
+                @if (ghosting !== null) {
                     <div>
                         <dt>ghosting</dt>
-                        <dd>{{ ghosts()!.toFixed(1) }}%</dd>
+                        <dd>{{ ghosting.toFixed(1) }}%</dd>
                     </div>
                 }
             </dl>
@@ -117,12 +118,7 @@
                         <div class="bar">
                             <span>{{ stage.name }}</span>
                             <span class="track">
-                                <span
-                                    class="fill"
-                                    [style.width.%]="
-                                        (stage.value / (last()!.timings.total || 1)) * 100
-                                    "
-                                ></span>
+                                <span class="fill" [style.width.%]="stage.share"></span>
                             </span>
                             <b>{{ stage.value.toFixed(0) }}</b>
                         </div>

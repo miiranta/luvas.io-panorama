@@ -16,7 +16,7 @@ export class ExposureCompensator {
     solve(pairs: readonly OverlapIntensity[], cameraCount: number): Float64Array {
         const gains = new Float64Array(cameraCount).fill(1);
         if (pairs.length === 0) return gains;
-        const intensityScale = 1 / (SIGMA_INTENSITY * SIGMA_INTENSITY);
+        const intensityScale = 2 / (SIGMA_INTENSITY * SIGMA_INTENSITY);
         const gainScale = 1 / (SIGMA_GAIN * SIGMA_GAIN);
         for (let iteration = 0; iteration < ITERATIONS; iteration++) {
             let maxDelta = 0;

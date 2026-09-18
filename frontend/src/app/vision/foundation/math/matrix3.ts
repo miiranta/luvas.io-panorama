@@ -20,6 +20,17 @@ export function mat3Multiply(a: Mat3, b: Mat3): Mat3 {
     return m;
 }
 
+export function mat3MultiplyTransposed(a: Mat3, b: Mat3, out: Mat3 = new Float64Array(9)): Mat3 {
+    for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+            let s = 0;
+            for (let k = 0; k < 3; k++) s += a[r * 3 + k] * b[c * 3 + k];
+            out[r * 3 + c] = s;
+        }
+    }
+    return out;
+}
+
 export function mat3Transpose(a: Mat3): Mat3 {
     const m = new Float64Array(9);
     for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) m[c * 3 + r] = a[r * 3 + c];

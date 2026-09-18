@@ -26,7 +26,7 @@ import { PairLinker, isFitted } from './pair-linker';
 
 const PAYLOAD_MARGIN = 4;
 const RELINK_DISTORTION = 0.01;
-const INTRUDER_REASON = 'not enough overlap with neighbouring cameras (intruder image)';
+const INTRUDER_REASON = 'not enough overlap with neighboring cameras (intruder image)';
 
 interface Candidate {
     frame: Keyframe;
@@ -159,7 +159,7 @@ export class StitchPipeline {
 
         if (!previous) {
             this.frames.add(frame);
-            this.cameras.initialise(frame);
+            this.cameras.initialize(frame);
             report.focal = this.cameras.focal ?? 0;
             const composing = performance.now();
             await this.compositor.recompose();
@@ -169,7 +169,7 @@ export class StitchPipeline {
 
         this.frames.add(frame);
         const matching = performance.now();
-        const { best, closest, links } = this.linkToNeighbours(frame, report);
+        const { best, closest, links } = this.linkToNeighbors(frame, report);
         timings.match = performance.now() - matching;
 
         if (!best) {
@@ -180,7 +180,7 @@ export class StitchPipeline {
 
         const modelling = performance.now();
         const parent = best.candidate.frame;
-        this.cameras.absorbFocals(links, frame, true);
+        this.cameras.blendFocals(links, frame);
         frame.rotation = this.cameras.placeRelativeTo(frame, parent, best.link);
         this.links.add(...links);
         timings.model = performance.now() - modelling;
@@ -241,7 +241,7 @@ export class StitchPipeline {
             }
         }
         this.links.replace(links);
-        if (all.length > 0) this.cameras.absorbFocals(links, all[0], false);
+        if (all.length > 0) this.cameras.restartFocal(links, all[0]);
 
         const graph = this.links.poseGraph(all);
         all.forEach((frame, index) => {
@@ -254,7 +254,7 @@ export class StitchPipeline {
         for (const index of graph.traversal) {
             const frame = all[index];
             if (index === graph.reference || frame.rejected) continue;
-            const parentIndex = graph.strongestPlacedNeighbour(index, placed);
+            const parentIndex = graph.strongestPlacedNeighbor(index, placed);
             if (parentIndex < 0) continue;
             const parent = all[parentIndex];
             const link = this.links.between(frame.id, parent.id);
@@ -307,7 +307,7 @@ export class StitchPipeline {
         );
     }
 
-    private linkToNeighbours(
+    private linkToNeighbors(
         frame: Keyframe,
         report: FrameReport,
     ): {
@@ -318,11 +318,11 @@ export class StitchPipeline {
         let best: { link: PairLink; candidate: Candidate } | null = null;
         let closest: Candidate | null = null;
         const links: PairLink[] = [];
-        for (const neighbour of this.neighbours(frame)) {
-            const pair = this.linker.match(frame, neighbour);
-            const link = isFitted(pair) ? this.linker.link(frame, neighbour, pair) : null;
-            const pairReport = this.linker.report(neighbour, pair, link);
-            const candidate = { frame: neighbour, matches: pair.matches, report: pairReport };
+        for (const neighbor of this.neighbors(frame)) {
+            const pair = this.linker.match(frame, neighbor);
+            const link = isFitted(pair) ? this.linker.link(frame, neighbor, pair) : null;
+            const pairReport = this.linker.report(neighbor, pair, link);
+            const candidate = { frame: neighbor, matches: pair.matches, report: pairReport };
             report.pairs.push(pairReport);
             if (!closest || pairReport.inliers > closest.report.inliers) closest = candidate;
             if (!link) continue;
@@ -334,9 +334,9 @@ export class StitchPipeline {
         return { best, closest, links };
     }
 
-    private neighbours(frame: Keyframe): Keyframe[] {
+    private neighbors(frame: Keyframe): Keyframe[] {
         const others = this.frames.active.filter((other) => other !== frame);
-        const limit = Math.max(1, Math.round(this.params.global.candidateNeighbours));
+        const limit = Math.max(1, Math.round(this.params.global.candidateNeighbors));
         if (others.length <= limit) return others;
         const chosen = this.frames.nearest(frame.rotation, limit, others);
         const newest = others[others.length - 1];

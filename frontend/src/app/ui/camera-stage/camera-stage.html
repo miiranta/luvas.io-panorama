@@ -51,8 +51,8 @@
         <button
             type="button"
             class="icon flip"
-            [disabled]="lockedToCamera()"
-            [title]="lockedToCamera() ? 'Reset the panorama to switch camera' : 'Switch camera'"
+            [disabled]="hasWork()"
+            [title]="hasWork() ? 'Reset the panorama to switch camera' : 'Switch camera'"
             (click)="switchCamera()"
         >
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">

@@ -1,7 +1,7 @@
 import { CanvasGeometry } from './canvas-geometry';
-import { ColorImage, imageCentre } from '../../foundation/imaging/image';
+import { ColorImage, imageCenter } from '../../foundation/imaging/image';
 import { mipPyramidFor, sampleTrilinear } from './mip-pyramid';
-import { Mat3, mat3Identity } from '../../foundation/math/matrix3';
+import { Mat3, mat3Identity, mat3Multiply } from '../../foundation/math/matrix3';
 import {
     Backend,
     BackendSelector,
@@ -87,17 +87,17 @@ void main() {
     vec3 ray = uOrientation * surfaceRay(cu, cv);
     vec3 cam = uRotation * ray;
     if (cam.z <= 1e-6) return;
-    vec2 normalised = cam.xy / cam.z;
-    float lens = 1.0 + uDistortion * dot(normalised, normalised);
-    vec2 centre = (uSourceSize - 1.0) * 0.5;
-    float px = uFocal * normalised.x * lens + centre.x;
-    float py = uFocal * normalised.y * lens + centre.y;
+    vec2 normalized = cam.xy / cam.z;
+    float lens = 1.0 + uDistortion * dot(normalized, normalized);
+    vec2 center = (uSourceSize - 1.0) * 0.5;
+    float px = uFocal * normalized.x * lens + center.x;
+    float py = uFocal * normalized.y * lens + center.y;
     if (px < 0.0 || py < 0.0 || px > uSourceSize.x - 1.0 || py > uSourceSize.y - 1.0) return;
-    vec3 colour = texture(uSource, vec2((px + 0.5) / uSourceSize.x, (py + 0.5) / uSourceSize.y)).rgb;
+    vec3 color = texture(uSource, vec2((px + 0.5) / uSourceSize.x, (py + 0.5) / uSourceSize.y)).rgb;
     float edge = min(min(px, uSourceSize.x - 1.0 - px), min(py, uSourceSize.y - 1.0 - py));
-    vec2 offset = (vec2(px, py) - centre) / uFocal;
+    vec2 offset = (vec2(px, py) - center) / uFocal;
     float falloff = max(0.05, 1.0 + uVignetting * dot(offset, offset));
-    fragColor = vec4(min(vec3(1.0), colour * uGain / falloff), min(1.0, (edge + 0.5) / uFeather));
+    fragColor = vec4(min(vec3(1.0), color * uGain / falloff), min(1.0, (edge + 0.5) / uFeather));
 }`;
 
 export const cpuWarpBackend: WarpBackend = {
@@ -109,16 +109,7 @@ export const cpuWarpBackend: WarpBackend = {
         const wraps = geometry.surface !== 'planar';
         const canvasWidth = geometry.width;
         const canvasHeight = geometry.height;
-        const orientation = geometry.orientation;
-        const m = new Float64Array(9);
-        for (let row = 0; row < 3; row++) {
-            for (let col = 0; col < 3; col++) {
-                m[row * 3 + col] =
-                    rotation[row * 3] * orientation[col] +
-                    rotation[row * 3 + 1] * orientation[3 + col] +
-                    rotation[row * 3 + 2] * orientation[6 + col];
-            }
-        }
+        const m = mat3Multiply(rotation, geometry.orientation);
         const columnA = new Float64Array(width);
         const columnB = new Float64Array(width);
         const inside = new Uint8Array(width);
@@ -136,8 +127,8 @@ export const cpuWarpBackend: WarpBackend = {
             }
         }
         const projected = new Float32Array(width * height * 2);
-        const cx = imageCentre(source.width);
-        const cy = imageCentre(source.height);
+        const cx = imageCenter(source.width);
+        const cy = imageCenter(source.height);
         let pixels = 0;
         for (let y = 0; y < height; y++) {
             const cv = v0 + y + 0.5;

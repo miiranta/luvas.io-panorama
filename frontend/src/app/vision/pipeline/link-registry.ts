@@ -1,6 +1,6 @@
 import { GraphPayload } from '../../core/models/reports';
 import { GraphEdge, PoseGraph } from '../registration/alignment/pose-graph';
-import { opticalAxis, yawPitchDegrees } from '../foundation/math/rotation';
+import { yawPitchDegrees } from '../foundation/math/rotation';
 import { Keyframe } from './keyframe';
 import { PairLink } from './pair-link';
 
@@ -87,10 +87,7 @@ export class LinkRegistry {
 
     private panoramaOrder(frames: readonly Keyframe[], graph: PoseGraph): number[] {
         if (graph.traversal.length === 0) return [];
-        const yaw = (frame: Keyframe) => {
-            const [x, , z] = opticalAxis(frame.rotation);
-            return Math.atan2(x, z);
-        };
+        const yaw = (frame: Keyframe) => yawPitchDegrees(frame.rotation).yaw;
         return frames
             .filter((frame, index) => graph.inMainComponent(index) && !frame.rejected)
             .sort((a, b) => yaw(a) - yaw(b))

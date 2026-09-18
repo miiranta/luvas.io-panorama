@@ -1,3 +1,8 @@
+import {
+    bilinearTaps,
+    createBilinearTaps,
+    sampleBilinear,
+} from '../../foundation/imaging/bilinear';
 import { PipelineParams, SurfaceKind } from '../../../core/models/params';
 import { BlurBackend } from '../blending/blur-backend';
 import { WarpBackend } from '../warping/warp-backend';
@@ -18,6 +23,7 @@ const EXPORT_MARGIN = 2;
 const SEAM_MEGAPIXELS = 2;
 const SOURCE_CACHE = 8;
 const HALO = 128;
+const maskTaps = createBilinearTaps();
 
 export const EXPORT_TILE = 1024;
 
@@ -348,16 +354,5 @@ export class PanoramaExporter {
 
 function sampleMask(seam: SeamMask, x: number, y: number): number {
     if (x < -1 || y < -1 || x > seam.width || y > seam.height) return 0;
-    const cx = Math.min(seam.width - 1, Math.max(0, x));
-    const cy = Math.min(seam.height - 1, Math.max(0, y));
-    const x0 = Math.floor(cx);
-    const y0 = Math.floor(cy);
-    const x1 = Math.min(seam.width - 1, x0 + 1);
-    const y1 = Math.min(seam.height - 1, y0 + 1);
-    const ax = cx - x0;
-    const ay = cy - y0;
-    const top = seam.mask[y0 * seam.width + x0] * (1 - ax) + seam.mask[y0 * seam.width + x1] * ax;
-    const bottom =
-        seam.mask[y1 * seam.width + x0] * (1 - ax) + seam.mask[y1 * seam.width + x1] * ax;
-    return top * (1 - ay) + bottom * ay;
+    return sampleBilinear(seam.mask, bilinearTaps(seam.width, seam.height, x, y, maskTaps));
 }

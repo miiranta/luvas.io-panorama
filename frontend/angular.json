@@ -37,7 +37,8 @@
               "includePaths": [
                 "src/styles"
               ]
-            }
+            },
+            "webWorkerTsConfig": "tsconfig.worker.json"
           },
           "configurations": {
             "production": {

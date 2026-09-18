@@ -49,7 +49,6 @@ export class CameraStage implements OnDestroy {
     );
     readonly canCompare = computed(() => this.stitcher.connection() !== null);
     readonly hasWork = computed(() => this.frames() > 0 || this.dropped() > 0);
-    readonly lockedToCamera = computed(() => this.hasWork());
 
     constructor() {
         afterNextRender(async () => {
@@ -75,7 +74,7 @@ export class CameraStage implements OnDestroy {
     }
 
     async switchCamera(): Promise<void> {
-        if (this.switching() || this.lockedToCamera()) return;
+        if (this.switching() || this.hasWork()) return;
         this.switching.set(true);
         try {
             this.stitcher.stopTracking();

@@ -59,7 +59,7 @@ void main() {
     fragColor = uvec4(bestIndex, best, second, 0u);
 }`;
 
-export interface NearestNeighbours {
+export interface NearestNeighbors {
     index: Int32Array;
     best: Uint32Array;
     second: Uint32Array;
@@ -71,7 +71,7 @@ export interface MatchBackend extends Backend {
         queryCount: number,
         train: Uint32Array,
         trainCount: number,
-    ): NearestNeighbours | null;
+    ): NearestNeighbors | null;
 }
 
 export const cpuMatchBackend: MatchBackend = {
@@ -123,7 +123,7 @@ class GpuMatchBackend implements MatchBackend {
         queryCount: number,
         train: Uint32Array,
         trainCount: number,
-    ): NearestNeighbours | null {
+    ): NearestNeighbors | null {
         if (queryCount === 0 || trainCount === 0) return null;
         this.query = this.upload(this.query, query, queryCount);
         this.train = this.upload(this.train, train, trainCount);
@@ -195,7 +195,7 @@ class RoutedMatchBackend extends RoutedBackend<MatchBackend> implements MatchBac
         queryCount: number,
         train: Uint32Array,
         trainCount: number,
-    ): NearestNeighbours | null {
+    ): NearestNeighbors | null {
         return this.route(queryCount * trainCount, (backend) =>
             backend.nearest(query, queryCount, train, trainCount),
         );

@@ -90,13 +90,14 @@ export class InsightsSheet {
         const report = this.last();
         if (!report) return null;
         const t = report.timings;
+        const total = t.total || 1;
         return [
             { name: 'detect', value: t.detect + t.describe },
             { name: 'match', value: t.match },
             { name: 'model', value: t.model },
             { name: 'bundle', value: t.bundle },
             { name: 'compose', value: t.compose },
-        ];
+        ].map((stage) => ({ ...stage, share: (stage.value / total) * 100 }));
     });
 
     readonly fill = computed(() => this.mosaic()?.fillPercent ?? null);

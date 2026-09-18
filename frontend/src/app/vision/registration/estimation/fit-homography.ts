@@ -12,42 +12,48 @@ export function fitHomography(
     const ns = hartleyNormalization(points, indices, true);
     const nd = hartleyNormalization(points, indices, false);
     if (indices.length === 4) return minimalHomography(points, indices, ns, nd);
-    const rows = indices.length * 2;
     const ata = new Float64Array(81);
-    const row = new Float64Array(9);
-    for (let k = 0; k < indices.length; k++) {
-        const p = points[indices[k]];
+    const rows = new Float64Array(18);
+    for (const index of indices) {
+        const p = points[index];
         const weight = localizationWeight(p);
-        const sx = ns.scale * (p.sx - ns.mx);
-        const sy = ns.scale * (p.sy - ns.my);
-        const dx = nd.scale * (p.dx - nd.mx);
-        const dy = nd.scale * (p.dy - nd.my);
-        row.fill(0);
-        row[0] = -sx;
-        row[1] = -sy;
-        row[2] = -1;
-        row[6] = dx * sx;
-        row[7] = dx * sy;
-        row[8] = dx;
-        for (let i = 0; i < 9; i++) {
-            for (let j = 0; j < 9; j++) ata[i * 9 + j] += weight * row[i] * row[j];
-        }
-        row.fill(0);
-        row[3] = -sx;
-        row[4] = -sy;
-        row[5] = -1;
-        row[6] = dy * sx;
-        row[7] = dy * sy;
-        row[8] = dy;
-        for (let i = 0; i < 9; i++) {
-            for (let j = 0; j < 9; j++) ata[i * 9 + j] += weight * row[i] * row[j];
+        dltRows(p, ns, nd, rows);
+        for (let row = 0; row < 18; row += 9) {
+            for (let i = 0; i < 9; i++) {
+                for (let j = 0; j < 9; j++)
+                    ata[i * 9 + j] += weight * rows[row + i] * rows[row + j];
+            }
         }
     }
-    if (rows < 8) return null;
     return denormalize(Float64Array.from(smallestEigenvector(ata, 9)), ns.matrix, nd.matrix);
 }
 
 type Normalization = ReturnType<typeof hartleyNormalization>;
+
+function dltRows(
+    p: Correspondence,
+    ns: Normalization,
+    nd: Normalization,
+    rows: Float64Array,
+): void {
+    const sx = ns.scale * (p.sx - ns.mx);
+    const sy = ns.scale * (p.sy - ns.my);
+    const dx = nd.scale * (p.dx - nd.mx);
+    const dy = nd.scale * (p.dy - nd.my);
+    rows.fill(0);
+    rows[0] = -sx;
+    rows[1] = -sy;
+    rows[2] = -1;
+    rows[6] = dx * sx;
+    rows[7] = dx * sy;
+    rows[8] = dx;
+    rows[12] = -sx;
+    rows[13] = -sy;
+    rows[14] = -1;
+    rows[15] = dy * sx;
+    rows[16] = dy * sy;
+    rows[17] = dy;
+}
 
 function minimalHomography(
     points: readonly Correspondence[],
@@ -57,26 +63,14 @@ function minimalHomography(
 ): Mat3 | null {
     const a = new Float64Array(64);
     const b = new Float64Array(8);
+    const rows = new Float64Array(18);
     for (let k = 0; k < 4; k++) {
-        const p = points[indices[k]];
-        const sx = ns.scale * (p.sx - ns.mx);
-        const sy = ns.scale * (p.sy - ns.my);
-        const dx = nd.scale * (p.dx - nd.mx);
-        const dy = nd.scale * (p.dy - nd.my);
-        const first = k * 2 * 8;
-        const second = first + 8;
-        a[first] = sx;
-        a[first + 1] = sy;
-        a[first + 2] = 1;
-        a[first + 6] = -dx * sx;
-        a[first + 7] = -dx * sy;
-        b[k * 2] = dx;
-        a[second + 3] = sx;
-        a[second + 4] = sy;
-        a[second + 5] = 1;
-        a[second + 6] = -dy * sx;
-        a[second + 7] = -dy * sy;
-        b[k * 2 + 1] = dy;
+        dltRows(points[indices[k]], ns, nd, rows);
+        for (let row = 0; row < 2; row++) {
+            const equation = k * 2 + row;
+            for (let i = 0; i < 8; i++) a[equation * 8 + i] = 0 - rows[row * 9 + i];
+            b[equation] = rows[row * 9 + 8];
+        }
     }
     const solution = solveLinearSystem(a, b, 8);
     if (!solution) return null;

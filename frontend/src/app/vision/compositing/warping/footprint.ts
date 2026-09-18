@@ -1,5 +1,5 @@
 import { undistort } from '../../registration/alignment/lens-distortion';
-import { imageCentre } from '../../foundation/imaging/image';
+import { imageCenter } from '../../foundation/imaging/image';
 import { Mat3, mat3Transpose } from '../../foundation/math/matrix3';
 import { CanvasBox } from './canvas-box';
 import { CanvasGeometry, worldToCanvas } from './canvas-geometry';
@@ -21,8 +21,8 @@ export function computeFootprint(
     distortion = 0,
 ): Footprint {
     const rt = mat3Transpose(rotation);
-    const cx = imageCentre(sourceWidth);
-    const cy = imageCentre(sourceHeight);
+    const cx = imageCenter(sourceWidth);
+    const cy = imageCenter(sourceHeight);
     const out = new Float64Array(2);
     const lens = new Float64Array(2);
     const samples = 24;
@@ -62,13 +62,13 @@ export function computeFootprint(
             sx += Math.cos(angle);
             sy += Math.sin(angle);
         }
-        const centre =
+        const center =
             ((Math.atan2(sy, sx) / (Math.PI * 2)) * geometry.width + geometry.width) %
             geometry.width;
         for (let i = 0; i < us.length; i++) {
             let u = us[i];
-            while (u - centre > geometry.width / 2) u -= geometry.width;
-            while (centre - u > geometry.width / 2) u += geometry.width;
+            while (u - center > geometry.width / 2) u -= geometry.width;
+            while (center - u > geometry.width / 2) u += geometry.width;
             if (u < u0) u0 = u;
             if (u > u1) u1 = u;
         }
@@ -127,8 +127,8 @@ function seesPole(
     const nx = (rotation[0] * wx + rotation[1] * wy + rotation[2] * wz) / z;
     const ny = (rotation[3] * wx + rotation[4] * wy + rotation[5] * wz) / z;
     const lens = 1 + distortion * (nx * nx + ny * ny);
-    const px = focal * nx * lens + imageCentre(sourceWidth);
-    const py = focal * ny * lens + imageCentre(sourceHeight);
+    const px = focal * nx * lens + imageCenter(sourceWidth);
+    const py = focal * ny * lens + imageCenter(sourceHeight);
     return px >= 0 && py >= 0 && px <= sourceWidth - 1 && py <= sourceHeight - 1;
 }
 
@@ -166,12 +166,12 @@ export function unionFootprints(
         let low = box.u0;
         let high = box.u1;
         if (wraps) {
-            const centre = (u0 + u1) / 2;
-            while ((low + high) / 2 - centre > geometry.width / 2) {
+            const center = (u0 + u1) / 2;
+            while ((low + high) / 2 - center > geometry.width / 2) {
                 low -= geometry.width;
                 high -= geometry.width;
             }
-            while (centre - (low + high) / 2 > geometry.width / 2) {
+            while (center - (low + high) / 2 > geometry.width / 2) {
                 low += geometry.width;
                 high += geometry.width;
             }

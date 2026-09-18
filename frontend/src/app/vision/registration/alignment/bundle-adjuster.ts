@@ -1,4 +1,4 @@
-import { Mat3, mat3Multiply } from '../../foundation/math/matrix3';
+import { Mat3, mat3Multiply, mat3MultiplyTransposed } from '../../foundation/math/matrix3';
 import { nearestRotation, rotationFromAxisAngle } from '../../foundation/math/rotation';
 import { solveSymmetric } from '../../foundation/math/cholesky';
 import { MAX_DISTORTION, undistort } from './lens-distortion';
@@ -364,15 +364,7 @@ export class BundleAdjuster {
             out.valid = false;
             return out;
         }
-        const m = this.relative;
-        for (let row = 0; row < 3; row++) {
-            for (let col = 0; col < 3; col++) {
-                m[row * 3 + col] =
-                    a[row * 3] * b[col * 3] +
-                    a[row * 3 + 1] * b[col * 3 + 1] +
-                    a[row * 3 + 2] * b[col * 3 + 2];
-            }
-        }
+        const m = mat3MultiplyTransposed(a, b, this.relative);
         undistort((sx - this.cx) / focal, (sy - this.cy) / focal, distortion, this.lens);
         const wx = this.lens[0];
         const wy = this.lens[1];

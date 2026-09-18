@@ -1,5 +1,11 @@
 import { Injectable, computed, signal } from '@angular/core';
-import { DEFAULT_PARAMS, ParamGroup, PipelineParams } from '../models/params';
+import {
+    DEFAULT_PARAMS,
+    ParamGroup,
+    ParamValue,
+    PipelineParams,
+    withParam,
+} from '../models/params';
 import {
     ConnectionPayload,
     FrameReport,
@@ -8,6 +14,20 @@ import {
     PreviewPayload,
 } from '../models/reports';
 import { PipelineState, WorkerRequest, WorkerResponse } from '../models/worker-protocol';
+
+const MIN_RASTER_SIDE = 32;
+
+function fitWidth(
+    width: number,
+    height: number,
+    targetWidth: number,
+): { width: number; height: number } {
+    const scale = Math.min(1, targetWidth / width);
+    return {
+        width: Math.max(MIN_RASTER_SIDE, Math.round(width * scale)),
+        height: Math.max(MIN_RASTER_SIDE, Math.round(height * scale)),
+    };
+}
 
 @Injectable({ providedIn: 'root' })
 export class StitcherService {
@@ -143,12 +163,8 @@ export class StitcherService {
         if (state.busy) this.status.set(state.stage);
     }
 
-    updateParam(group: ParamGroup, key: string, value: number | boolean | string): void {
-        this.params.update((current) => {
-            const next = structuredClone(current);
-            (next[group] as unknown as Record<string, unknown>)[key] = value;
-            return next;
-        });
+    updateParam(group: ParamGroup, key: string, value: ParamValue): void {
+        this.params.update((current) => withParam(current, group, key, value));
         this.send({ kind: 'params', params: this.params() });
     }
 
@@ -266,9 +282,7 @@ export class StitcherService {
     }
 
     private rasterizePreview(source: HTMLVideoElement): ImageData | null {
-        const scale = Math.min(1, this.workWidth() / source.videoWidth);
-        const width = Math.max(32, Math.round(source.videoWidth * scale));
-        const height = Math.max(32, Math.round(source.videoHeight * scale));
+        const { width, height } = fitWidth(source.videoWidth, source.videoHeight, this.workWidth());
         let context = this.previewCanvas;
         if (!context || context.canvas.width !== width || context.canvas.height !== height) {
             context = new OffscreenCanvas(width, height).getContext('2d', {
@@ -287,14 +301,13 @@ export class StitcherService {
         height: number,
         targetWidth: number,
     ): ImageData | null {
-        const scale = Math.min(1, targetWidth / width);
-        const w = Math.max(32, Math.round(width * scale));
-        const h = Math.max(32, Math.round(height * scale));
-        const canvas = new OffscreenCanvas(w, h);
-        const context = canvas.getContext('2d', { willReadFrequently: true });
+        const size = fitWidth(width, height, targetWidth);
+        const context = new OffscreenCanvas(size.width, size.height).getContext('2d', {
+            willReadFrequently: true,
+        });
         if (!context) return null;
-        context.drawImage(source, 0, 0, w, h);
-        return context.getImageData(0, 0, w, h);
+        context.drawImage(source, 0, 0, size.width, size.height);
+        return context.getImageData(0, 0, size.width, size.height);
     }
 
     exportPanorama(): Promise<Blob> {

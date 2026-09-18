@@ -1,14 +1,9 @@
 import { CanvasBox } from '../warping/canvas-box';
 import { MosaicGrid } from './mosaic-grid';
-import {
-    MosaicSurface,
-    MosaicView,
-    TileSnapshot,
-    cellSource,
-    snapshotGrid,
-} from './mosaic-surface';
+import { MosaicSurface, MosaicView, TileSnapshot, snapshotGrid } from './mosaic-surface';
 import { WarpTile } from '../warping/warp-tile';
 import { REDUCE_SHADER } from './blur-backend';
+import { canReduce } from './gaussian-pyramid';
 import { GlContext, GlProgram, GlTarget, growTarget } from '../../foundation/gpu/gl-context';
 
 const ACCUMULATE = `#version 300 es
@@ -270,15 +265,11 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
 
     snapshot(tile: WarpTile, step: number): TileSnapshot {
         const { width, height } = snapshotGrid(tile, step);
-        const cells = width * height;
-        const mean = new Float32Array(cells * 3);
-        const filled = new Uint8Array(cells);
-        const covered = new Uint8Array(cells);
         const gl = this.context.gl;
         const target = this.sized(this.scratch, 0, width, height);
-        if (!target) return { width, height, step, mean, filled, covered };
+        if (!target) return this.collectSnapshot(tile, step, () => false);
         const program = this.programs.snapshot;
-        this.run(program, target, 0, 0, width, height, () => {
+        this.context.draw(program, target, width, height, () => {
             this.context.bindInput(0, this.flat.texture, program.uniforms['uFlat']);
             gl.uniform2i(program.uniforms['uTileOrigin'], tile.u0, tile.v0);
             gl.uniform2i(program.uniforms['uTileSize'], tile.width, tile.height);
@@ -287,39 +278,22 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
             gl.uniform2i(program.uniforms['uMosaicOrigin'], this.originU, this.originV);
             gl.uniform1f(program.uniforms['uCanvasWidth'], this.canvasWidth);
         });
-        const data = new Float32Array(cells * 4);
+        const data = new Float32Array(width * height * 4);
         gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, data);
         this.context.finish();
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const cell = y * width + x;
-                const [sx, sy] = cellSource(tile, step, x, y);
-                const index = this.indexAt(tile.u0 + sx, tile.v0 + sy);
-                if (index >= 0) covered[cell] = this.coverage[index];
-                const weight = data[cell * 4 + 3];
-                if (weight <= 1e-6) continue;
-                filled[cell] = 1;
-                mean[cell * 3] = data[cell * 4] / weight;
-                mean[cell * 3 + 1] = data[cell * 4 + 1] / weight;
-                mean[cell * 3 + 2] = data[cell * 4 + 2] / weight;
-            }
-        }
-        return { width, height, step, mean, filled, covered };
+        return this.collectSnapshot(tile, step, (cell, _, out) => {
+            const weight = data[cell * 4 + 3];
+            if (weight <= 1e-6) return false;
+            out[0] = data[cell * 4] / weight;
+            out[1] = data[cell * 4 + 1] / weight;
+            out[2] = data[cell * 4 + 2] / weight;
+            return true;
+        });
     }
 
     addFlat(tile: WarpTile): void {
         this.uploadTile(tile);
-        this.accumulate(
-            0,
-            this.flat,
-            tile,
-            this.tile as WebGLTexture,
-            null,
-            tile.width,
-            tile.height,
-            0,
-        );
-        this.markCoverage(tile);
+        this.accumulateFlat(tile);
     }
 
     addPyramidBands(tile: WarpTile): void {
@@ -329,7 +303,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         ];
         for (let level = 1; level < this.bands; level++) {
             const previous = levels[level - 1];
-            if (previous.width <= 2 || previous.height <= 2) {
+            if (!canReduce(previous)) {
                 levels.push(previous);
                 continue;
             }
@@ -338,7 +312,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
             const target = this.sized(this.scratch, level, width, height);
             if (!target) return;
             const program = this.programs.reduce;
-            this.run(program, target, 0, 0, width, height, () => {
+            this.context.draw(program, target, width, height, () => {
                 this.context.bindInput(0, previous.texture, program.uniforms['uSource']);
                 this.context.gl.uniform2i(
                     program.uniforms['uSourceSize'],
@@ -363,17 +337,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
                 1e-5,
             );
         }
-        this.accumulate(
-            0,
-            this.flat,
-            tile,
-            this.tile as WebGLTexture,
-            null,
-            tile.width,
-            tile.height,
-            0,
-        );
-        this.markCoverage(tile);
+        this.accumulateFlat(tile);
     }
 
     render(
@@ -381,7 +345,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         overlay?: MosaicSurface | null,
         region?: CanvasBox | null,
     ): ImageData {
-        const box: CanvasBox = region ?? { u0: 0, v0: 0, u1: this.width - 1, v1: this.height - 1 };
+        const box = this.regionOrFull(region);
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const extra =
@@ -405,13 +369,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
             } | null = null;
             for (let level = this.bands - 1; level >= 0; level--) {
                 const isFinal = level === 0;
-                const stride = this.bandWidth[level];
-                const u0 = isFinal ? box.u0 : Math.max(0, (box.u0 >> level) - 1);
-                const v0 = isFinal ? box.v0 : Math.max(0, (box.v0 >> level) - 1);
-                const u1 = isFinal ? box.u1 : Math.min(stride - 1, (box.u1 >> level) + 1);
-                const v1 = isFinal
-                    ? box.v1
-                    : Math.min(this.bandHeight[level] - 1, (box.v1 >> level) + 1);
+                const { u0, v0, u1, v1 } = isFinal ? box : this.levelRegion(level, box);
                 const regionWidth = u1 - u0 + 1;
                 const regionHeight = v1 - v0 + 1;
                 const target = isFinal
@@ -420,7 +378,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
                 if (!target) return new ImageData(out, width, height);
                 const program = this.programs.collapse;
                 const prior = previous;
-                this.run(program, target, 0, 0, regionWidth, regionHeight, () => {
+                this.context.draw(program, target, regionWidth, regionHeight, () => {
                     this.context.bindInput(
                         0,
                         this.bandTargets[level].texture,
@@ -458,7 +416,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
             }
         } else {
             const program = this.programs.collapse;
-            this.run(program, final, 0, 0, width, height, () => {
+            this.context.draw(program, final, width, height, () => {
                 this.context.bindInput(0, this.flat.texture, program.uniforms['uBand']);
                 this.context.bindInput(
                     1,
@@ -505,6 +463,20 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         gl.deleteTexture(this.empty);
     }
 
+    private accumulateFlat(tile: WarpTile): void {
+        this.accumulate(
+            0,
+            this.flat,
+            tile,
+            this.tile as WebGLTexture,
+            null,
+            tile.width,
+            tile.height,
+            0,
+        );
+        this.markCoverage(tile);
+    }
+
     protected clearAccumulators(box: CanvasBox): void {
         this.clearTarget(this.flat, box);
         for (let level = 0; level < this.bands; level++) {
@@ -548,47 +520,36 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         gl.blendEquation(gl.FUNC_ADD);
         gl.blendFunc(gl.ONE, gl.ONE);
         for (const run of this.columnRuns(level, tile.u0 >> level, width)) {
-            this.run(program, target, run.localStart, firstRow, run.length, rows, () => {
-                this.context.bindInput(0, current, program.uniforms['uCurrent']);
-                this.context.bindInput(
-                    1,
-                    coarse ? coarse.texture : this.empty,
-                    program.uniforms['uCoarse'],
-                );
-                gl.uniform1i(program.uniforms['uHasCoarse'], coarse ? 1 : 0);
-                gl.uniform2i(
-                    program.uniforms['uOffset'],
-                    run.tileStart - run.localStart,
-                    firstY - firstRow,
-                );
-                gl.uniform2i(
-                    program.uniforms['uCoarseSize'],
-                    coarse?.width ?? 1,
-                    coarse?.height ?? 1,
-                );
-                gl.uniform1f(program.uniforms['uMinWeight'], minWeight);
-            });
+            this.context.draw(
+                program,
+                target,
+                run.length,
+                rows,
+                () => {
+                    this.context.bindInput(0, current, program.uniforms['uCurrent']);
+                    this.context.bindInput(
+                        1,
+                        coarse ? coarse.texture : this.empty,
+                        program.uniforms['uCoarse'],
+                    );
+                    gl.uniform1i(program.uniforms['uHasCoarse'], coarse ? 1 : 0);
+                    gl.uniform2i(
+                        program.uniforms['uOffset'],
+                        run.tileStart - run.localStart,
+                        firstY - firstRow,
+                    );
+                    gl.uniform2i(
+                        program.uniforms['uCoarseSize'],
+                        coarse?.width ?? 1,
+                        coarse?.height ?? 1,
+                    );
+                    gl.uniform1f(program.uniforms['uMinWeight'], minWeight);
+                },
+                run.localStart,
+                firstRow,
+            );
         }
         gl.disable(gl.BLEND);
-    }
-
-    private run(
-        program: GlProgram,
-        target: GlTarget,
-        x: number,
-        y: number,
-        width: number,
-        height: number,
-        bind: () => void,
-    ): void {
-        const gl = this.context.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        gl.viewport(x, y, width, height);
-        gl.useProgram(program.program);
-        gl.bindVertexArray(program.vao);
-        bind();
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        gl.bindVertexArray(null);
     }
 
     private clearTarget(target: GlTarget, box: CanvasBox): void {

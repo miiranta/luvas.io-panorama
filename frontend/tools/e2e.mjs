@@ -1,86 +1,17 @@
-import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { openChrome } from './devtools.mjs';
 
 const APP_URL = process.env.APP_URL ?? 'http://localhost:4173';
 const VIDEO = process.env.FAKE_VIDEO ?? '/tmp/pano.y4m';
 const SHOTS = Number(process.env.SHOTS ?? 7);
 const OUT = process.env.SHOT_DIR ?? '/tmp/e2e';
 
-const profile = mkdtempSync(join(tmpdir(), 'chrome-e2e-'));
-const chrome = spawn(
-    'google-chrome',
-    [
-        '--headless=new',
-        '--remote-debugging-port=9333',
-        `--user-data-dir=${profile}`,
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--use-angle=gl',
-        '--enable-gpu',
-        '--window-size=1280,900',
-        '--use-fake-ui-for-media-stream',
-        '--use-fake-device-for-media-stream',
-        `--use-file-for-fake-video-capture=${VIDEO}`,
-        '--autoplay-policy=no-user-gesture-required',
-        'about:blank',
-    ],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
-);
-
-const log = [];
-chrome.stderr.on('data', (chunk) => log.push(chunk.toString()));
-
-async function endpoint() {
-    for (let attempt = 0; attempt < 60; attempt++) {
-        try {
-            const response = await fetch('http://127.0.0.1:9333/json/version');
-            const json = await response.json();
-            return json.webSocketDebuggerUrl;
-        } catch {
-            await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-    }
-    throw new Error(`devtools unavailable\n${log.join('')}`);
-}
-
-const wsUrl = await endpoint();
-const socket = new WebSocket(wsUrl);
-await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve, { once: true });
-    socket.addEventListener('error', reject, { once: true });
+const { socket, call, evaluate, close } = await openChrome({
+    name: 'e2e',
+    port: 9333,
+    video: VIDEO,
 });
-
-let nextId = 1;
-const pending = new Map();
-const events = [];
-socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data);
-    if (message.id && pending.has(message.id)) {
-        const { resolve, reject } = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error) reject(new Error(JSON.stringify(message.error)));
-        else resolve(message.result);
-    } else if (message.method) {
-        events.push(message);
-    }
-});
-
-function send(method, params = {}, sessionId) {
-    const id = nextId++;
-    return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        socket.send(JSON.stringify({ id, method, params, sessionId }));
-    });
-}
-
-const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
-const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-const call = (method, params) => send(method, params, sessionId);
-
-await call('Page.enable');
-await call('Runtime.enable');
 await call('Log.enable');
 
 const consoleErrors = [];
@@ -93,18 +24,6 @@ socket.addEventListener('message', (event) => {
         consoleErrors.push(message.params.exceptionDetails.text);
     }
 });
-
-async function evaluate(expression) {
-    const result = await call('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-    });
-    if (result.exceptionDetails) {
-        throw new Error(`evaluation error: ${result.exceptionDetails.text}`);
-    }
-    return result.result.value;
-}
 
 async function screenshot(name) {
     const { data } = await call('Page.captureScreenshot', { format: 'png' });
@@ -120,7 +39,6 @@ function check(name, pass, detail) {
 }
 
 try {
-    const { mkdirSync } = await import('node:fs');
     mkdirSync(OUT, { recursive: true });
 
     await call('Page.navigate', { url: APP_URL });
@@ -390,7 +308,7 @@ try {
     })()
   `);
     check(
-        'neighbourhood graph rendered',
+        'neighborhood graph rendered',
         insights !== null && insights.nodes > 1 && insights.edges > 0,
         insights
             ? `${insights.nodes} nodes, ${insights.edges} edges, order ${insights.order}`
@@ -473,7 +391,7 @@ try {
         0,
     );
     check(
-        'icons centred in their buttons',
+        'icons centered in their buttons',
         iconGeometry.length >= 3 && worst < 0.75,
         `${iconGeometry.length} buttons, max offset ${worst.toFixed(2)} px`,
     );
@@ -722,8 +640,7 @@ try {
 } catch (error) {
     check('run without exceptions', false, error instanceof Error ? error.message : String(error));
 } finally {
-    socket.close();
-    chrome.kill('SIGKILL');
+    close();
 }
 
 const failures = results.filter((r) => !r.pass);

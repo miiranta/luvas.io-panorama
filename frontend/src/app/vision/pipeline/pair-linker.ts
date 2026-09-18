@@ -109,12 +109,12 @@ export class PairLinker {
         distortion: number,
     ): [number, number] {
         undistort(
-            (x - frame.centreX) / focal,
-            (y - frame.centreY) / focal,
+            (x - frame.centerX) / focal,
+            (y - frame.centerY) / focal,
             distortion,
             this.scratch,
         );
-        return [frame.centreX + focal * this.scratch[0], frame.centreY + focal * this.scratch[1]];
+        return [frame.centerX + focal * this.scratch[0], frame.centerY + focal * this.scratch[1]];
     }
 
     verified(inliers: number, accepted: number, requireRatio = true): boolean {
@@ -139,7 +139,7 @@ export class PairLinker {
             inliers: fit.inlierCount,
             meanError: fit.meanError,
             verified: this.verified(fit.inlierCount, accepted),
-            focal: focalFromHomography(fit.matrix, query.centreX, query.centreY),
+            focal: focalFromHomography(fit.matrix, query.centerX, query.centerY),
             matrix: fit.matrix,
             observations: sampleObservations(query.id, train.id, correspondences, fit),
             meanIntensityA,
@@ -161,31 +161,34 @@ export class PairLinker {
     }
 }
 
+function sampleInliers<T>(items: readonly T[], fit: ModelFit, limit: number): T[] {
+    const stride = Math.max(1, Math.floor(fit.inlierCount / limit));
+    const sampled: T[] = [];
+    let kept = 0;
+    items.forEach((item, index) => {
+        if (!fit.inliers[index]) return;
+        kept++;
+        if (kept % stride === 0) sampled.push(item);
+    });
+    return sampled;
+}
+
 function sampleObservations(
     cameraA: number,
     cameraB: number,
     correspondences: readonly Correspondence[],
     fit: ModelFit,
 ): BundleObservation[] {
-    const observations: BundleObservation[] = [];
-    const stride = Math.max(1, Math.floor(fit.inlierCount / MAX_OBSERVATIONS_PER_PAIR));
-    let kept = 0;
-    correspondences.forEach((pair, c) => {
-        if (!fit.inliers[c]) return;
-        kept++;
-        if (kept % stride !== 0) return;
-        observations.push({
-            cameraA,
-            cameraB,
-            ax: pair.sx,
-            ay: pair.sy,
-            bx: pair.dx,
-            by: pair.dy,
-            scaleA: pair.sourceScale ?? 1,
-            scaleB: pair.targetScale ?? 1,
-        });
-    });
-    return observations;
+    return sampleInliers(correspondences, fit, MAX_OBSERVATIONS_PER_PAIR).map((pair) => ({
+        cameraA,
+        cameraB,
+        ax: pair.sx,
+        ay: pair.sy,
+        bx: pair.dx,
+        by: pair.dy,
+        scaleA: pair.sourceScale ?? 1,
+        scaleB: pair.targetScale ?? 1,
+    }));
 }
 
 function overlapArea(query: Keyframe, train: Keyframe, matrix: Mat3): number {
@@ -208,20 +211,15 @@ function overlapArea(query: Keyframe, train: Keyframe, matrix: Mat3): number {
 }
 
 function intensitySamples(query: Keyframe, train: Keyframe, pair: FittedPair): IntensitySample[] {
-    const samples: IntensitySample[] = [];
-    if (!query.work || !train.work) return samples;
-    const stride = Math.max(1, Math.floor(pair.fit.inlierCount / MAX_INTENSITY_SAMPLES));
-    let seen = 0;
-    pair.correspondences.forEach((c, index) => {
-        if (!pair.fit.inliers[index] || !query.work || !train.work) return;
-        seen++;
-        if (seen % stride !== 0) return;
-        const a = patchMean(query.work, c.sx, c.sy);
-        const b = patchMean(train.work, c.dx, c.dy);
-        if (a === null || b === null) return;
-        samples.push({ ax: c.sx, ay: c.sy, intensityA: a, bx: c.dx, by: c.dy, intensityB: b });
+    const queryWork = query.work;
+    const trainWork = train.work;
+    if (!queryWork || !trainWork) return [];
+    return sampleInliers(pair.correspondences, pair.fit, MAX_INTENSITY_SAMPLES).flatMap((c) => {
+        const intensityA = patchMean(queryWork, c.sx, c.sy);
+        const intensityB = patchMean(trainWork, c.dx, c.dy);
+        if (intensityA === null || intensityB === null) return [];
+        return [{ ax: c.sx, ay: c.sy, intensityA, bx: c.dx, by: c.dy, intensityB }];
     });
-    return samples;
 }
 
 function meanIntensities(samples: readonly IntensitySample[]): [number, number] {

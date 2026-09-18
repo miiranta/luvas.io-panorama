@@ -162,10 +162,12 @@ export class GlContext {
         width: number,
         height: number,
         bind: () => void,
+        x = 0,
+        y = 0,
     ): void {
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        gl.viewport(0, 0, width, height);
+        gl.viewport(x, y, width, height);
         gl.useProgram(program.program);
         gl.bindVertexArray(program.vao);
         bind();

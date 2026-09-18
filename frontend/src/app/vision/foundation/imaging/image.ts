@@ -1,3 +1,7 @@
+import { bilinearTaps, createBilinearTaps, sampleBilinear } from './bilinear';
+
+const taps = createBilinearTaps();
+
 export interface GrayImage {
     width: number;
     height: number;
@@ -20,20 +24,9 @@ export function toGray(image: ColorImage): GrayImage {
 }
 
 export function sampleGrayBilinear(image: GrayImage, x: number, y: number): number {
-    const { width, height, data } = image;
-    const cx = Math.min(width - 1, Math.max(0, x));
-    const cy = Math.min(height - 1, Math.max(0, y));
-    const x0 = Math.floor(cx);
-    const y0 = Math.floor(cy);
-    const x1 = Math.min(width - 1, x0 + 1);
-    const y1 = Math.min(height - 1, y0 + 1);
-    const ax = cx - x0;
-    const ay = cy - y0;
-    const top = data[y0 * width + x0] * (1 - ax) + data[y0 * width + x1] * ax;
-    const bottom = data[y1 * width + x0] * (1 - ax) + data[y1 * width + x1] * ax;
-    return top * (1 - ay) + bottom * ay;
+    return sampleBilinear(image.data, bilinearTaps(image.width, image.height, x, y, taps));
 }
 
-export function imageCentre(size: number): number {
+export function imageCenter(size: number): number {
     return (size - 1) / 2;
 }

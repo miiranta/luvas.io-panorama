@@ -12,7 +12,7 @@ export function hash2(x: number, y: number, seed: number): number {
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-function cellColour(u: number, v: number, cell: number, seed: number, out: Float64Array): void {
+function cellColor(u: number, v: number, cell: number, seed: number, out: Float64Array): void {
     const cx = Math.floor(u / cell);
     const cy = Math.floor(v / cell);
     out[0] = hash2(cx, cy, seed);
@@ -37,7 +37,7 @@ export class World {
             [12, 0.18],
             [4, 0.1],
         ] as const) {
-            cellColour(u, v, cell, this.seed + cell, layer);
+            cellColor(u, v, cell, this.seed + cell, layer);
             r += layer[0] * amount;
             g += layer[1] * amount;
             b += layer[2] * amount;

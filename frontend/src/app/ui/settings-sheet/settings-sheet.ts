@@ -6,7 +6,7 @@ import {
     output,
     signal,
 } from '@angular/core';
-import { ParamGroup } from '../../core/models/params';
+import { ParamGroup, ParamValue, paramValue } from '../../core/models/params';
 import { PARAM_SPECS, ParamSpec } from '../../core/models/param-spec';
 import { StitcherService } from '../../core/services/stitcher-service';
 
@@ -43,12 +43,8 @@ export class SettingsSheet {
         return groups;
     });
 
-    value(spec: ParamSpec): number | boolean | string {
-        const group = this.params()[spec.group] as unknown as Record<
-            string,
-            number | boolean | string
-        >;
-        return group[spec.key];
+    value(spec: ParamSpec): ParamValue {
+        return paramValue(this.params(), spec.group, spec.key);
     }
 
     asNumber(spec: ParamSpec): number {
@@ -81,7 +77,7 @@ export class SettingsSheet {
         this.apply(spec, !this.asBool(spec));
     }
 
-    private apply(spec: ParamSpec, value: number | boolean | string): void {
+    private apply(spec: ParamSpec, value: ParamValue): void {
         this.stitcher.updateParam(spec.group, spec.key, value);
         if (spec.restage === 'compose' || spec.restage === 'global') this.stitcher.recompose();
     }

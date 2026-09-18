@@ -2,6 +2,7 @@ import { CpuMosaic } from './cpu-mosaic';
 import { MosaicFactory, MosaicSurface, MosaicView } from './mosaic-surface';
 import { WarpTile } from '../warping/warp-tile';
 import { cpuBlurBackend } from './blur-backend';
+import { describeBackend } from '../../foundation/gpu/backend-selector';
 import { GlContext } from '../../foundation/gpu/gl-context';
 import { GpuMosaic } from './gpu-mosaic';
 
@@ -91,11 +92,7 @@ export class MosaicBackend {
     describe(enabled: boolean): string {
         if (!enabled) return 'cpu (disabled)';
         const { gpu, reason, gpuMs, cpuMs } = this.decide();
-        const timing =
-            gpuMs !== null && cpuMs !== null
-                ? ` · gpu ${gpuMs.toFixed(1)}ms vs cpu ${cpuMs.toFixed(1)}ms`
-                : '';
-        return `${gpu ? 'webgl2' : 'cpu'} (${reason})${timing}`;
+        return describeBackend(gpu ? 'webgl2' : 'cpu', reason, gpuMs, cpuMs);
     }
 
     private decide(): Verdict {

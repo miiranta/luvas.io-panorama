@@ -1,12 +1,11 @@
+import {
+    bilinearTaps,
+    createBilinearTaps,
+    sampleBilinear,
+} from '../../foundation/imaging/bilinear';
 import { BlurBackend, cpuBlurBackend } from './blur-backend';
 import { CanvasBox } from '../warping/canvas-box';
-import {
-    MosaicSurface,
-    MosaicView,
-    TileSnapshot,
-    cellSource,
-    snapshotGrid,
-} from './mosaic-surface';
+import { MosaicSurface, MosaicView, TileSnapshot } from './mosaic-surface';
 import { MosaicGrid } from './mosaic-grid';
 import { PyramidLevel, expandLevel, gaussianPyramid } from './gaussian-pyramid';
 import { WarpTile } from '../warping/warp-tile';
@@ -53,27 +52,9 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
     }
 
     snapshot(tile: WarpTile, step: number): TileSnapshot {
-        const { width, height } = snapshotGrid(tile, step);
-        const cells = width * height;
-        const mean = new Float32Array(cells * 3);
-        const filled = new Uint8Array(cells);
-        const covered = new Uint8Array(cells);
-        const colour = new Float32Array(3);
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const [sx, sy] = cellSource(tile, step, x, y);
-                const index = this.indexAt(tile.u0 + sx, tile.v0 + sy);
-                if (index < 0) continue;
-                const cell = y * width + x;
-                covered[cell] = this.coverage[index];
-                if (!this.meanColorAt(index, colour)) continue;
-                filled[cell] = 1;
-                mean[cell * 3] = colour[0];
-                mean[cell * 3 + 1] = colour[1];
-                mean[cell * 3 + 2] = colour[2];
-            }
-        }
-        return { width, height, step, mean, filled, covered };
+        return this.collectSnapshot(tile, step, (_, index, out) =>
+            index >= 0 ? this.meanColorAt(index, out) : false,
+        );
     }
 
     dispose(): void {
@@ -90,22 +71,14 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
     }
 
     addFlat(tile: WarpTile): void {
-        for (let y = 0; y < tile.height; y++) {
-            const row = this.row(tile.v0 + y);
-            if (row < 0) continue;
-            for (let x = 0; x < tile.width; x++) {
-                const t = y * tile.width + x;
-                const w = tile.mask[t];
-                if (w <= 0) continue;
-                const column = this.column(tile.u0 + x);
-                if (column < 0) continue;
-                const index = row * this.width + column;
-                this.flatColor[index * 3] += tile.color[t * 3] * w;
-                this.flatColor[index * 3 + 1] += tile.color[t * 3 + 1] * w;
-                this.flatColor[index * 3 + 2] += tile.color[t * 3 + 2] * w;
-                this.flatWeight[index] += w;
-            }
-        }
+        this.forEachCovered(tile, (t, row, column) => {
+            const w = tile.mask[t];
+            const index = row * this.width + column;
+            this.flatColor[index * 3] += tile.color[t * 3] * w;
+            this.flatColor[index * 3 + 1] += tile.color[t * 3 + 1] * w;
+            this.flatColor[index * 3 + 2] += tile.color[t * 3 + 2] * w;
+            this.flatWeight[index] += w;
+        });
         this.markCoverage(tile);
     }
 
@@ -187,6 +160,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
     }
 
     private collapseRegion(overlay: CpuMosaic | null, box: CanvasBox): PyramidLevel {
+        const taps = createBilinearTaps();
         let previous: {
             data: Float32Array;
             u0: number;
@@ -196,50 +170,31 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         } | null = null;
         for (let level = this.bands - 1; level >= 0; level--) {
             const stride = this.bandWidth[level];
-            const u0 = Math.max(0, (box.u0 >> level) - 1);
-            const v0 = Math.max(0, (box.v0 >> level) - 1);
-            const u1 = Math.min(stride - 1, (box.u1 >> level) + 1);
-            const v1 = Math.min(this.bandHeight[level] - 1, (box.v1 >> level) + 1);
+            const { u0, v0, u1, v1 } = this.levelRegion(level, box);
             const width = u1 - u0 + 1;
             const height = v1 - v0 + 1;
             const merged = new Float32Array(width * height * 3);
             if (previous) {
                 const coarse = previous;
                 for (let y = 0; y < height; y++) {
-                    const fy = Math.min(coarse.height - 1, Math.max(0, (v0 + y) * 0.5 - coarse.v0));
-                    const y0 = Math.floor(fy);
-                    const y1 = Math.min(coarse.height - 1, y0 + 1);
-                    const ay = fy - y0;
                     for (let x = 0; x < width; x++) {
-                        const fx = Math.min(
-                            coarse.width - 1,
-                            Math.max(0, (u0 + x) * 0.5 - coarse.u0),
+                        bilinearTaps(
+                            coarse.width,
+                            coarse.height,
+                            (u0 + x) * 0.5 - coarse.u0,
+                            (v0 + y) * 0.5 - coarse.v0,
+                            taps,
                         );
-                        const x0 = Math.floor(fx);
-                        const x1 = Math.min(coarse.width - 1, x0 + 1);
-                        const ax = fx - x0;
-                        const i00 = (y0 * coarse.width + x0) * 3;
-                        const i10 = (y0 * coarse.width + x1) * 3;
-                        const i01 = (y1 * coarse.width + x0) * 3;
-                        const i11 = (y1 * coarse.width + x1) * 3;
-                        const w00 = (1 - ax) * (1 - ay);
-                        const w10 = ax * (1 - ay);
-                        const w01 = (1 - ax) * ay;
-                        const w11 = ax * ay;
                         const target = (y * width + x) * 3;
                         for (let c = 0; c < 3; c++) {
-                            merged[target + c] =
-                                coarse.data[i00 + c] * w00 +
-                                coarse.data[i10 + c] * w10 +
-                                coarse.data[i01 + c] * w01 +
-                                coarse.data[i11 + c] * w11;
+                            merged[target + c] = sampleBilinear(coarse.data, taps, 3, c);
                         }
                     }
                 }
             }
-            const colour = this.bandColor[level];
+            const color = this.bandColor[level];
             const weight = this.bandWeight[level];
-            const extraColour = overlay?.bandColor[level] ?? null;
+            const extraColor = overlay?.bandColor[level] ?? null;
             const extraWeight = overlay?.bandWeight[level] ?? null;
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
@@ -250,7 +205,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
                     const target = (y * width + x) * 3;
                     for (let c = 0; c < 3; c++) {
                         const sum =
-                            colour[index * 3 + c] + (extraColour ? extraColour[index * 3 + c] : 0);
+                            color[index * 3 + c] + (extraColor ? extraColor[index * 3 + c] : 0);
                         merged[target + c] += sum * inverse;
                     }
                 }
@@ -273,12 +228,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         overlay?: MosaicSurface | null,
         region?: CanvasBox | null,
     ): ImageData {
-        const box: CanvasBox = region ?? {
-            u0: 0,
-            v0: 0,
-            u1: this.width - 1,
-            v1: this.height - 1,
-        };
+        const box = this.regionOrFull(region);
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const out = new Uint8ClampedArray(width * height * 4);

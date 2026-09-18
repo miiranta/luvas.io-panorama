@@ -44,7 +44,7 @@ export interface GlobalParams {
     bundleIterations: number;
     refineFocal: boolean;
     refineDistortion: boolean;
-    candidateNeighbours: number;
+    candidateNeighbors: number;
     keyframeMinAngle: number;
 }
 
@@ -114,7 +114,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
         bundleIterations: 12,
         refineFocal: true,
         refineDistortion: true,
-        candidateNeighbours: 5,
+        candidateNeighbors: 5,
         keyframeMinAngle: 3,
     },
     compose: {
@@ -138,3 +138,22 @@ export const DEFAULT_PARAMS: PipelineParams = {
 };
 
 export type ParamGroup = keyof PipelineParams;
+
+export type ParamValue = number | boolean | string;
+
+type ParamRecord = Record<string, ParamValue>;
+
+export function paramValue(params: PipelineParams, group: ParamGroup, key: string): ParamValue {
+    return (params[group] as unknown as ParamRecord)[key];
+}
+
+export function withParam(
+    params: PipelineParams,
+    group: ParamGroup,
+    key: string,
+    value: ParamValue,
+): PipelineParams {
+    const next = structuredClone(params);
+    (next[group] as unknown as ParamRecord)[key] = value;
+    return next;
+}

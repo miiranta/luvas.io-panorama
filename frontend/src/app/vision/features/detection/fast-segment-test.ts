@@ -1,7 +1,7 @@
 import { DetectParams } from '../../../core/models/params';
 import { GrayImage } from '../../foundation/imaging/image';
 
-const FAST_OFFSETS: readonly [number, number][] = [
+export const FAST_OFFSETS: readonly [number, number][] = [
     [0, -3],
     [1, -3],
     [2, -2],

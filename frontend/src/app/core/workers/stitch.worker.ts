@@ -13,7 +13,7 @@ let queuedRecomposes = 0;
 const SETTLE_DELAY = 400;
 
 function post(message: WorkerResponse, transfer: Transferable[] = []): void {
-    (self as unknown as Worker).postMessage(message, transfer);
+    self.postMessage(message, transfer);
 }
 
 function postState(stage: string, progress: number): void {
@@ -170,7 +170,7 @@ function scheduleSettle(): void {
             await settle();
             postState('ready', 1);
         });
-    }, SETTLE_DELAY) as unknown as number;
+    }, SETTLE_DELAY);
 }
 
 self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {

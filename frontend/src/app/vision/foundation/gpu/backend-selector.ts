@@ -3,6 +3,19 @@ import { GlContext } from './gl-context';
 const REQUIRED_SPEEDUP = 0.85;
 const MAX_GPU_FAILURES = 3;
 
+export function describeBackend(
+    kind: string,
+    reason: string,
+    gpuMs: number | null,
+    cpuMs: number | null,
+): string {
+    const timing =
+        gpuMs !== null && cpuMs !== null
+            ? ` · gpu ${gpuMs.toFixed(1)}ms vs cpu ${cpuMs.toFixed(1)}ms`
+            : '';
+    return `${kind} (${reason})${timing}`;
+}
+
 export interface Backend {
     readonly kind: string;
 }
@@ -63,15 +76,11 @@ export class BackendSelector<T extends Backend> {
         if (!enabled) return 'cpu (disabled)';
         this.choice ??= this.calibrate();
         const { backend, reason, gpuMs, cpuMs } = this.choice;
-        const timing =
-            gpuMs !== null && cpuMs !== null
-                ? ` · gpu ${gpuMs.toFixed(1)}ms vs cpu ${cpuMs.toFixed(1)}ms`
-                : '';
         const failures =
             backend instanceof RoutedBackend && backend.failureCount > 0
                 ? ` · ${backend.failureCount} failures`
                 : '';
-        return `${backend.kind} (${reason})${timing}${failures}`;
+        return `${describeBackend(backend.kind, reason, gpuMs, cpuMs)}${failures}`;
     }
 
     private calibrate(): Choice<T> {

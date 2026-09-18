@@ -1,5 +1,11 @@
 import { CanvasBox } from '../warping/canvas-box';
-import { MosaicSurface, MosaicView } from './mosaic-surface';
+import {
+    MosaicSurface,
+    MosaicView,
+    TileSnapshot,
+    cellSource,
+    snapshotGrid,
+} from './mosaic-surface';
 import { WarpTile } from '../warping/warp-tile';
 
 export interface ColumnRun {
@@ -87,26 +93,75 @@ export abstract class MosaicGrid {
         return runs;
     }
 
-    protected markCoverage(tile: WarpTile): void {
-        this.markDirty(tile);
+    protected collectSnapshot(
+        tile: WarpTile,
+        step: number,
+        sample: (cell: number, index: number, out: Float32Array) => boolean,
+    ): TileSnapshot {
+        const { width, height } = snapshotGrid(tile, step);
+        const cells = width * height;
+        const mean = new Float32Array(cells * 3);
+        const filled = new Uint8Array(cells);
+        const covered = new Uint8Array(cells);
+        const color = new Float32Array(3);
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const [sx, sy] = cellSource(tile, step, x, y);
+                const index = this.indexAt(tile.u0 + sx, tile.v0 + sy);
+                const cell = y * width + x;
+                if (index >= 0) covered[cell] = this.coverage[index];
+                if (!sample(cell, index, color)) continue;
+                filled[cell] = 1;
+                mean[cell * 3] = color[0];
+                mean[cell * 3 + 1] = color[1];
+                mean[cell * 3 + 2] = color[2];
+            }
+        }
+        return { width, height, step, mean, filled, covered };
+    }
+
+    protected forEachCovered(
+        tile: WarpTile,
+        visit: (tileIndex: number, row: number, column: number) => void,
+    ): void {
         for (let y = 0; y < tile.height; y++) {
             const row = this.row(tile.v0 + y);
             if (row < 0) continue;
             for (let x = 0; x < tile.width; x++) {
-                if (tile.mask[y * tile.width + x] <= 0) continue;
+                const tileIndex = y * tile.width + x;
+                if (tile.mask[tileIndex] <= 0) continue;
                 const column = this.column(tile.u0 + x);
-                if (column < 0) continue;
-                this.coverage[row * this.width + column] = 1;
-                if (!this.covered) {
-                    this.covered = { u0: column, v0: row, u1: column, v1: row };
-                } else {
-                    if (column < this.covered.u0) this.covered.u0 = column;
-                    if (column > this.covered.u1) this.covered.u1 = column;
-                    if (row < this.covered.v0) this.covered.v0 = row;
-                    if (row > this.covered.v1) this.covered.v1 = row;
-                }
+                if (column >= 0) visit(tileIndex, row, column);
             }
         }
+    }
+
+    protected markCoverage(tile: WarpTile): void {
+        this.markDirty(tile);
+        this.forEachCovered(tile, (_, row, column) => {
+            this.coverage[row * this.width + column] = 1;
+            if (!this.covered) {
+                this.covered = { u0: column, v0: row, u1: column, v1: row };
+                return;
+            }
+            if (column < this.covered.u0) this.covered.u0 = column;
+            if (column > this.covered.u1) this.covered.u1 = column;
+            if (row < this.covered.v0) this.covered.v0 = row;
+            if (row > this.covered.v1) this.covered.v1 = row;
+        });
+    }
+
+    protected levelRegion(level: number, box: CanvasBox): CanvasBox {
+        return {
+            u0: Math.max(0, (box.u0 >> level) - 1),
+            v0: Math.max(0, (box.v0 >> level) - 1),
+            u1: Math.min(this.bandWidth[level] - 1, (box.u1 >> level) + 1),
+            v1: Math.min(this.bandHeight[level] - 1, (box.v1 >> level) + 1),
+        };
+    }
+
+    protected regionOrFull(region?: CanvasBox | null): CanvasBox {
+        return region ?? { u0: 0, v0: 0, u1: this.width - 1, v1: this.height - 1 };
     }
 
     private markDirty(tile: WarpTile): void {

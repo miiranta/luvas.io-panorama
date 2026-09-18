@@ -22,9 +22,10 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm run verify                      # 81 checagens numéricas contra ground truth sintético
+npm test -- --watch=false           # 81 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
+npm run verify                      # 82 checagens numéricas contra ground truth sintético
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
-npm run e2e                         # 28 checagens ponta a ponta em Chrome headless
+npm run e2e                         # 29 checagens ponta a ponta em Chrome headless
 ```
 
 ## Interface
@@ -335,8 +336,8 @@ infraestrutura WebGL2 compartilhada fica em `foundation/gpu/`.
 
 | pasta | arquivos (um método cada) | conceito | aula |
 |---|---|---|---|
-| `foundation/math/` | `matrix3`, `rotation` (Rodrigues, rotação mais próxima, eixo óptico), `jacobi-eigen`, `gaussian-elimination`, `cholesky` | transformações, rotações, álgebra linear | 01 |
-| `foundation/imaging/` | `image` (`toGray`, bilinear), `gaussian-blur`, `sobel-gradients`, `gray-pyramid` | convolução, filtro gaussiano, gradiente, pirâmide de escalas | 02–05 |
+| `foundation/math/` | `matrix3`, `rotation` (Rodrigues, rotação mais próxima, eixo óptico), `jacobi-eigen`, `gaussian-elimination`, `cholesky`, `median` | transformações, rotações, álgebra linear | 01 |
+| `foundation/imaging/` | `image` (`toGray`, centro óptico), `bilinear`, `gaussian-blur`, `sobel-gradients`, `gray-pyramid` | convolução, filtro gaussiano, gradiente, pirâmide de escalas | 02–05 |
 | `foundation/gpu/` | `gl-context`, `separable-blur`, `backend-selector`, `accelerator-suite` | engenharia (fora das aulas) | — |
 | `features/detection/` | `structure-tensor`, `harris`, `shi-tomasi`, `fast-segment-test`, `non-maximum-suppression`, `adaptive-suppression` (SSC), `sub-pixel-refinement`, `corner-detector` | detecção de cantos | 05 |
 | `features/description/` | `dominant-orientation`, `brief-descriptor` | descritores binários invariantes à rotação | 05 |
@@ -348,7 +349,86 @@ infraestrutura WebGL2 compartilhada fica em `foundation/gpu/`.
 | `compositing/seams/` | `seam-finder` | costura de menor custo | 08 |
 | `compositing/blending/` | `gaussian-pyramid`, `mosaic-surface`, `mosaic-grid` (janela, emenda de 360°, cobertura), `cpu-mosaic`, `gpu-mosaic` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
 | `compositing/export/` | `panorama-exporter`, `png-writer` | exportação em resolução cheia | — |
-| `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `MosaicCompositor`, `LiveTracker` | fluxo do enunciado, etapas 1–6 | T1 |
+| `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `PhotometricCalibrator`, `MosaicCompositor`, `LiveTracker` | fluxo do enunciado, etapas 1–6 | T1 |
+
+### Responsabilidade de cada arquivo
+
+Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou da classe principal.
+
+**core/** — estado da app e ponte com o worker
+- `models/params.ts` — parâmetros do pipeline, valores padrão e leitura/escrita por grupo e chave.
+- `models/param-spec.ts` — rótulo, dica e faixa de cada parâmetro exposto no painel.
+- `models/reports.ts` — formato dos relatórios e cargas que o worker manda para a UI.
+- `models/worker-protocol.ts` — mensagens trocadas entre serviço e worker.
+- `services/camera-service.ts` — abre, troca e fecha a câmera (getUserMedia, novas tentativas).
+- `services/stitcher-service.ts` — fala com o worker: capturas, prévias ao vivo, exportação, estado em signals.
+- `workers/stitch.worker.ts` — fila de mensagens do worker, refino ocioso e exportação.
+
+**ui/** — um componente por pasta
+- `camera-stage` — vídeo, HUD, disparador e botões; `tracks-layer` — linhas de casamento sobre o vídeo;
+  `panorama-layer` — minimapa e exportação; `settings-sheet` — parâmetros; `insights-sheet` —
+  diagnóstico, grafo e custos; `match-dialog` — comparação lado a lado; `confirm-dialog` — confirmação
+  genérica; `busy-veil` — indicador de trabalho.
+
+**vision/foundation/** — base usada por todas as etapas
+- `math/matrix3.ts` — álgebra de matrizes 3×3; `rotation.ts` — rotações (Rodrigues, rotação mais próxima,
+  ângulo entre rotações, eixo óptico, yaw/pitch); `jacobi-eigen.ts` — autovalores de matriz simétrica;
+  `gaussian-elimination.ts` — sistema linear com pivoteamento; `cholesky.ts` — sistema simétrico
+  definido positivo; `median.ts` — mediana.
+- `imaging/image.ts` — tipos de imagem, luminância e centro óptico; `bilinear.ts` — interpolação
+  bilinear para qualquer número de canais; `gaussian-blur.ts` — filtro gaussiano separável;
+  `sobel-gradients.ts` — gradiente de Sobel; `gray-pyramid.ts` — pirâmide de escalas para detecção.
+- `gpu/gl-context.ts` — contexto WebGL2 compartilhado, programas e alvos; `separable-blur.ts` —
+  gaussiana na GPU; `backend-selector.ts` — calibra GPU contra CPU e escolhe; `accelerator-suite.ts`
+  — agrupa os seletores de cada etapa.
+
+**vision/features/** — características
+- `detection/structure-tensor.ts` — tensor de estrutura e mapa de resposta; `harris.ts`,
+  `shi-tomasi.ts` — as duas medidas de canto; `fast-segment-test.ts` — teste de segmento FAST;
+  `non-maximum-suppression.ts` — máximos locais; `sub-pixel-refinement.ts` — vértice da quadrática;
+  `adaptive-suppression.ts` — ANMS (SSC); `corner-detector.ts` — encadeia as etapas acima;
+  `detect-backend.ts` — mesma detecção na GPU; `keypoint.ts` — tipo do ponto.
+- `description/dominant-orientation.ts` — orientação por histograma de gradientes;
+  `brief-descriptor.ts` — BRIEF rodado pela orientação.
+- `matching/hamming-distance.ts` — distância de Hamming; `descriptor-matcher.ts` — vizinho mais
+  próximo, ratio test e checagem cruzada; `match-backend.ts` — busca de vizinhos na GPU.
+
+**vision/registration/** — alinhamento geométrico
+- `estimation/correspondence.ts` — par de pontos, escala de localização e peso; `hartley-normalization.ts`
+  — normalização de Hartley; `fit-homography.ts` — DLT (mínimo exato e mínimos quadrados ponderados);
+  `fit-affine.ts`, `fit-similarity.ts`, `fit-translation.ts` — os outros modelos; `fit-model.ts` —
+  escolhe o modelo e rejeita homografias implausíveis; `transfer-error.ts` — erro de transferência
+  simples e simétrico; `ransac-estimator.ts` — RANSAC adaptativo com reajuste iterado.
+- `alignment/rotational-camera.ts` — focal e rotação a partir de H; `lens-distortion.ts` — modelo κ₁;
+  `bundle-adjuster.ts` — Levenberg-Marquardt esparso; `pose-graph.ts` — árvore geradora, componentes e
+  referência; `level-horizon.ts` — endireitamento.
+
+**vision/compositing/** — composição
+- `warping/canvas-geometry.ts` — superfícies plano/cilindro/esfera; `canvas-box.ts` — caixas e
+  alinhamento à pirâmide; `footprint.ts` — região de cada foto na tela (incluindo polos e a emenda de
+  360°); `canvas-transfer.ts` — mudança de resolução da tela; `mip-pyramid.ts` — mipmaps e amostragem
+  trilinear; `warper.ts` — recorta a região e chama o backend; `warp-backend.ts` — warp inverso em CPU e
+  GPU; `warp-tile.ts` — tipo do bloco.
+- `photometric/exposure-compensator.ts` — ganhos de exposição; `vignetting.ts` — modelo e estimativa de
+  vinheta.
+- `seams/seam-finder.ts` — costura de menor custo e rampa a partir dela.
+- `blending/gaussian-pyramid.ts` — reduzir/expandir; `mosaic-surface.ts` — contrato de um mosaico;
+  `mosaic-grid.ts` — janela na tela, emenda de 360°, cobertura e retratos; `cpu-mosaic.ts`,
+  `gpu-mosaic.ts` — acumuladores multibanda e planos; `blur-backend.ts` — pirâmide na GPU;
+  `mosaic-backend.ts` — escolhe entre mosaico de CPU e de GPU.
+- `export/panorama-exporter.ts` — exportação em blocos com costura global; `png-writer.ts` — PNG em fluxo.
+
+**vision/pipeline/** — orquestração
+- `stitch-pipeline.ts` — fluxo por foto, refino ocioso e reordenação; `keyframe.ts` — uma foto e suas
+  imagens; `keyframe-store.ts` — fotos e orçamento de memória; `feature-extractor.ts` — detecção e
+  descrição multiescala; `pair-linker.ts` — transforma um par em ligação verificada; `pair-link.ts` —
+  tipo da ligação; `link-registry.ts` — ligações e grafo; `camera-solver.ts` — focal, distorção e
+  bundle; `photometric-calibrator.ts` — vinheta e ganhos a partir das ligações; `mosaic-compositor.ts`
+  — mosaicos, prévia e decisão de recompor; `live-tracker.ts` — casamento ao vivo.
+
+**tools/** — `verify.ts` (checagens numéricas), `e2e.mjs` (navegador real), `profile.mjs` (custo por
+etapa), `devtools.mjs` (Chrome headless compartilhado), `scene.ts` (cena sintética), `fakecam.ts`
+(vídeo da câmera falsa), `polyfill.mjs` (`ImageData` no Node).
 
 `StitchPipeline.addFrame` lê como o enunciado: `features.extract` → `linkToNeighbours` (casamento
 + RANSAC contra as câmeras vizinhas) → `cameras.placeRelativeTo` → `cameras.adjust` (bundle) →
@@ -431,7 +511,10 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   expandindo do nível mais grosso ao mais fino só na região coberta.
 - **Exposição e vinheta** (Aula 08 §8.4, Brown & Lowe §6) — ganhos por imagem minimizando
   `½ ΣΣ N_ij((g_i Ī_ij − g_j Ī_ji)²/σ_N² + (1 − g_i)²/σ_g²)` com os valores do artigo
-  (`σ_N = 10`, `σ_g = 0,1`) e `N_ij` a área de sobreposição. Antes disso, a vinheta
+  (`σ_N = 10`, `σ_g = 0,1`) e `N_ij` a área de sobreposição. A soma é sobre pares **ordenados**, então
+  ao derivar em `g_i` o termo de dados entra duas vezes e o de prior uma:
+  `g_i = Σ N(2·g_j Ī_ji Ī_ij/σ_N² + 1/σ_g²) / Σ N(2·Ī_ij²/σ_N² + 1/σ_g²)` (um teste confere que o
+  resultado é ponto estacionário desse objetivo). Antes disso, a vinheta
   `V(r) = 1 + β r²` (Aula 01, queda cos⁴) é estimada por Gauss-Newton em log-intensidade a partir de
   amostras nos inliers de cada par, junto com um log-ganho por câmera, com Huber e modelo de ruído
   `σ = 0,08`; o warp divide cada pixel por `V(r)` e as médias de sobreposição são corrigidas antes
@@ -440,6 +523,10 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   X das câmeras, aplicado como rotação global da tela.
 
 ## Verificação
+
+Três camadas: `npm test` roda os **testes unitários** de cada etapa (modelos recuperados
+exatamente, inversas, casos degenerados, o objetivo de ganho do artigo, a emenda de 360°);
+`npm run verify` roda o pipeline inteiro contra ground truth; `npm run e2e` roda a app no Chrome.
 
 `npm run verify` monta um mundo equirretangular procedural (hash multiescala, detalhe em qualquer
 zoom), renderiza vistas com rotação conhecida e confere o pipeline contra o ground truth:

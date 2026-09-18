@@ -89,15 +89,15 @@ function seamDistance(
         const x = current % width;
         const next = distance[current] + 1;
         for (const offset of [-1, 1, -width, width]) {
-            const neighbour = current + offset;
-            if (neighbour < 0 || neighbour >= cells) continue;
+            const neighbor = current + offset;
+            if (neighbor < 0 || neighbor >= cells) continue;
             if (offset === -1 && x === 0) continue;
             if (offset === 1 && x === width - 1) continue;
-            if (!overlap[neighbour] || label[neighbour] !== 1 || distance[neighbour] <= next) {
+            if (!overlap[neighbor] || label[neighbor] !== 1 || distance[neighbor] <= next) {
                 continue;
             }
-            distance[neighbour] = next;
-            queue[tail++] = neighbour;
+            distance[neighbor] = next;
+            queue[tail++] = neighbor;
         }
     }
     return distance;
@@ -169,14 +169,14 @@ export class SeamFinder {
                 heap.push(0, cell, 0);
             }
         }
-        const neighbours = [-1, 1, -width, width];
+        const neighbors = [-1, 1, -width, width];
         while (heap.pop()) {
             const current = heap.index;
             const currentCost = heap.cost;
             const currentLabel = heap.label;
             if (currentCost > cost[current] + 1e-9) continue;
             const x = current % width;
-            for (const offset of neighbours) {
+            for (const offset of neighbors) {
                 const next = current + offset;
                 if (next < 0 || next >= cells) continue;
                 if (offset === -1 && x === 0) continue;

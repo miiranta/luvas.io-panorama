@@ -1,4 +1,5 @@
 import { Mat3, mat3Identity, mat3Inverse, mat3Multiply } from '../../foundation/math/matrix3';
+import { median } from '../../foundation/math/median';
 import { nearestRotation } from '../../foundation/math/rotation';
 
 const MIN_FOCAL = 50;
@@ -14,18 +15,13 @@ function intrinsics(focal: number, cx: number, cy: number): Mat3 {
 }
 
 export function focalFromHomography(raw: Mat3, cx = 0, cy = 0): number | null {
-    const centred = mat3Multiply(translation(-cx, -cy), mat3Multiply(raw, translation(cx, cy)));
-    const inverse = mat3Inverse(centred);
+    const centered = mat3Multiply(translation(-cx, -cy), mat3Multiply(raw, translation(cx, cy)));
+    const inverse = mat3Inverse(centered);
     const candidates = [
-        ...focalCandidates(centred),
+        ...focalCandidates(centered),
         ...(inverse ? focalCandidates(inverse) : []),
     ].filter((f) => isFinite(f) && f > MIN_FOCAL && f < MAX_FOCAL);
-    if (candidates.length === 0) return null;
-    candidates.sort((a, b) => a - b);
-    const mid = Math.floor(candidates.length / 2);
-    return candidates.length % 2 === 1
-        ? candidates[mid]
-        : (candidates[mid - 1] + candidates[mid]) / 2;
+    return median(candidates);
 }
 
 export function relativeRotationFromHomography(

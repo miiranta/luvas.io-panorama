@@ -1,4 +1,4 @@
-import { PyramidLevel, gaussianPyramid } from './gaussian-pyramid';
+import { PyramidLevel, canReduce, gaussianPyramid } from './gaussian-pyramid';
 import {
     Backend,
     BackendSelector,
@@ -83,7 +83,7 @@ class GpuBlurBackend implements BlurBackend {
         let inputHeight = base.height;
         for (let level = 1; level < levels; level++) {
             const previous = pyramid[level - 1];
-            if (previous.width <= 2 || previous.height <= 2) {
+            if (!canReduce(previous)) {
                 pyramid.push(previous);
                 continue;
             }

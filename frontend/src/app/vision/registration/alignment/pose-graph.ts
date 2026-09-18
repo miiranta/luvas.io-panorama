@@ -150,7 +150,7 @@ export class PoseGraph {
         return this.components[node] === this.mainComponent;
     }
 
-    strongestPlacedNeighbour(node: number, placed: ReadonlySet<number>): number {
+    strongestPlacedNeighbor(node: number, placed: ReadonlySet<number>): number {
         let parent = -1;
         let bestInliers = -1;
         for (const edge of this.tree) {

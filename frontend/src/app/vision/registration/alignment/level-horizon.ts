@@ -27,10 +27,10 @@ export function levelHorizon(rotations: readonly Mat3[]): Mat3 {
     if (up[0] * down[0] + up[1] * down[1] + up[2] * down[2] < 0) {
         for (let i = 0; i < 3; i++) up[i] = -up[i];
     }
-    const centre = opticalAxis(rotations[Math.floor(rotations.length / 2)]);
-    const along = centre[0] * up[0] + centre[1] * up[1] + centre[2] * up[2];
+    const center = opticalAxis(rotations[Math.floor(rotations.length / 2)]);
+    const along = center[0] * up[0] + center[1] * up[1] + center[2] * up[2];
     const forward = normalize(
-        centre.map((value, i) => value - up[i] * along),
+        center.map((value, i) => value - up[i] * along),
         1e-6,
     );
     if (!forward) return mat3Identity();

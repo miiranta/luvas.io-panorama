@@ -1,4 +1,11 @@
-import { Mat3, mat3Determinant, mat3Identity, mat3Multiply, mat3Transpose } from './matrix3';
+import {
+    Mat3,
+    mat3Determinant,
+    mat3Identity,
+    mat3Multiply,
+    mat3MultiplyTransposed,
+    mat3Transpose,
+} from './matrix3';
 import { jacobiEigen } from './jacobi-eigen';
 
 export function nearestRotation(m: Mat3): Mat3 {
@@ -43,7 +50,7 @@ export function rotationFromAxisAngle(rx: number, ry: number, rz: number): Mat3 
 }
 
 export function rotationAngleBetween(a: Mat3, b: Mat3): number {
-    const rel = mat3Multiply(a, mat3Transpose(b));
+    const rel = mat3MultiplyTransposed(a, b);
     const trace = rel[0] + rel[4] + rel[8];
     const cos = Math.min(1, Math.max(-1, (trace - 1) / 2));
     return Math.acos(cos);

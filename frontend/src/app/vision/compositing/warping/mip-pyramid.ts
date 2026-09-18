@@ -1,3 +1,8 @@
+import {
+    bilinearTaps,
+    createBilinearTaps,
+    sampleBilinear,
+} from '../../foundation/imaging/bilinear';
 import { ColorImage } from '../../foundation/imaging/image';
 
 export interface MipLevel {
@@ -7,6 +12,7 @@ export interface MipLevel {
 }
 
 const cache = new WeakMap<ColorImage, MipLevel[]>();
+const taps = createBilinearTaps();
 
 export function mipPyramidFor(image: ColorImage, maxLevels = 6): MipLevel[] {
     const cached = cache.get(image);
@@ -53,27 +59,8 @@ function buildMipPyramid(image: ColorImage, maxLevels = 6): MipLevel[] {
 }
 
 function sampleLevel(level: MipLevel, x: number, y: number, out: Float32Array): void {
-    const { width, height, data } = level;
-    const cx = Math.min(width - 1, Math.max(0, x));
-    const cy = Math.min(height - 1, Math.max(0, y));
-    const x0 = Math.floor(cx);
-    const y0 = Math.floor(cy);
-    const x1 = Math.min(width - 1, x0 + 1);
-    const y1 = Math.min(height - 1, y0 + 1);
-    const ax = cx - x0;
-    const ay = cy - y0;
-    const w00 = (1 - ax) * (1 - ay);
-    const w10 = ax * (1 - ay);
-    const w01 = (1 - ax) * ay;
-    const w11 = ax * ay;
-    const i00 = (y0 * width + x0) * 3;
-    const i10 = (y0 * width + x1) * 3;
-    const i01 = (y1 * width + x0) * 3;
-    const i11 = (y1 * width + x1) * 3;
-    for (let c = 0; c < 3; c++) {
-        out[c] =
-            data[i00 + c] * w00 + data[i10 + c] * w10 + data[i01 + c] * w01 + data[i11 + c] * w11;
-    }
+    bilinearTaps(level.width, level.height, x, y, taps);
+    for (let c = 0; c < 3; c++) out[c] = sampleBilinear(level.data, taps, 3, c);
 }
 
 export function sampleTrilinear(

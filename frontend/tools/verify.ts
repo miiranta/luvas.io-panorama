@@ -2,7 +2,10 @@ import { inflateSync } from 'node:zlib';
 import { DEFAULT_PARAMS, PipelineParams } from '../src/app/core/models/params';
 import { StitchPipeline } from '../src/app/vision/pipeline/stitch-pipeline';
 import { Mat3, mat3Multiply, mat3Transpose } from '../src/app/vision/foundation/math/matrix3';
-import { rotationFromAxisAngle } from '../src/app/vision/foundation/math/rotation';
+import {
+    rotationAngleBetween,
+    rotationFromAxisAngle,
+} from '../src/app/vision/foundation/math/rotation';
 import {
     focalFromHomography,
     relativeRotationFromHomography,
@@ -17,7 +20,10 @@ import { levelHorizon } from '../src/app/vision/registration/alignment/level-hor
 import { computeFootprint } from '../src/app/vision/compositing/warping/footprint';
 import { createCanvasGeometry } from '../src/app/vision/compositing/warping/canvas-geometry';
 import { PoseGraph } from '../src/app/vision/registration/alignment/pose-graph';
-import { fastSegmentTest } from '../src/app/vision/features/detection/fast-segment-test';
+import {
+    FAST_OFFSETS,
+    fastSegmentTest,
+} from '../src/app/vision/features/detection/fast-segment-test';
 import { Keyframe } from '../src/app/vision/pipeline/keyframe';
 import { CpuMosaic } from '../src/app/vision/compositing/blending/cpu-mosaic';
 
@@ -68,10 +74,7 @@ function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: 
 }
 
 function angleBetween(a: Mat3, b: Mat3): number {
-    const rel = mat3Multiply(a, mat3Transpose(b));
-    const trace = rel[0] + rel[4] + rel[8];
-    const cos = Math.min(1, Math.max(-1, (trace - 1) / 2));
-    return (Math.acos(cos) * 180) / Math.PI;
+    return (rotationAngleBetween(a, b) * 180) / Math.PI;
 }
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -418,17 +421,7 @@ function runUnitChecks(): void {
 
     const side = 9;
     const patch = new Float32Array(side * side).fill(100);
-    const ring = [
-        [1, -3],
-        [2, -2],
-        [3, -1],
-        [3, 0],
-        [3, 1],
-        [2, 2],
-        [1, 3],
-        [0, 3],
-        [-1, 3],
-    ];
+    const ring = FAST_OFFSETS.slice(1, 10);
     for (const [dx, dy] of ring) patch[(4 + dy) * side + 4 + dx] = 200;
     const segment = fastSegmentTest(
         { width: side, height: side, data: patch },
@@ -467,7 +460,7 @@ function runUnitChecks(): void {
     );
 
     check(
-        'ratio test needs a second neighbour',
+        'ratio test needs a second neighbor',
         lonely.length === 1 && !lonely[0].accepted,
         `single candidate accepted=${lonely[0]?.accepted}`,
     );
@@ -630,8 +623,8 @@ async function runScalingCheck(): Promise<void> {
     const pairCounts = samples.map((s) => s.pairs);
     check(
         'evaluated pairs bounded by the spatial index',
-        Math.max(...pairCounts) <= DEFAULT_PARAMS.global.candidateNeighbours,
-        `at most ${Math.max(...pairCounts)} pairs per frame (limit ${DEFAULT_PARAMS.global.candidateNeighbours})`,
+        Math.max(...pairCounts) <= DEFAULT_PARAMS.global.candidateNeighbors,
+        `at most ${Math.max(...pairCounts)} pairs per frame (limit ${DEFAULT_PARAMS.global.candidateNeighbors})`,
     );
     const graph = pipeline.graph();
     const accepted = graph.nodes.filter((n) => !n.rejected).length;

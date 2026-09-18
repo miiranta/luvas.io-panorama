@@ -94,8 +94,8 @@ export function angularSpan(
             vertical: (Math.atan(h(box.v1 + 1)) - Math.atan(h(box.v0))) * toDegrees,
         };
     }
-    const angle = (value: number, centre: number) =>
-        Math.atan((value - centre) / geometry.planarScale);
+    const angle = (value: number, center: number) =>
+        Math.atan((value - center) / geometry.planarScale);
     return {
         horizontal:
             (angle(box.u1 + 1, geometry.width / 2) - angle(box.u0, geometry.width / 2)) * toDegrees,

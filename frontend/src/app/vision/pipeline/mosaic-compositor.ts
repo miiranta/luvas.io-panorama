@@ -6,15 +6,9 @@ import {
     angularSpan,
     createCanvasGeometry,
 } from '../compositing/warping/canvas-geometry';
-import { ExposureCompensator } from '../compositing/photometric/exposure-compensator';
 import { levelHorizon } from '../registration/alignment/level-horizon';
 import { CpuMosaic } from '../compositing/blending/cpu-mosaic';
 import { MosaicFactory, MosaicSurface } from '../compositing/blending/mosaic-surface';
-import {
-    VignettingSample,
-    estimateVignetting,
-    vignetteAt,
-} from '../compositing/photometric/vignetting';
 import { ColorImage } from '../foundation/imaging/image';
 import { SeamFinder, SeamStats } from '../compositing/seams/seam-finder';
 import { Warper } from '../compositing/warping/warper';
@@ -29,7 +23,7 @@ import {
     ExportedImage,
     PanoramaExporter,
 } from '../compositing/export/panorama-exporter';
-import { PairLink } from './pair-link';
+import { PhotometricCalibrator } from './photometric-calibrator';
 
 const STABLE_DEGREES = 0.2;
 const PREVIEW_TWIST_DEGREES = 0.15;
@@ -58,11 +52,10 @@ export class MosaicCompositor {
     private committedGeometry: CanvasGeometry | null = null;
     private committedDistortion = 0;
     private committedVignetting = 0;
-    private vignettingEstimate = 0;
     private readonly committedGains = new Map<number, number>();
     private readonly committedPlacements = new Map<number, { rotation: Mat3; focal: number }>();
     private readonly stats = new Map<number, SeamStats>();
-    private readonly exposure = new ExposureCompensator();
+    private readonly photometry: PhotometricCalibrator;
 
     constructor(
         private readonly params: () => PipelineParams,
@@ -74,7 +67,9 @@ export class MosaicCompositor {
         private readonly report: ProgressReporter = () => undefined,
         private readonly createMosaic: MosaicFactory = (width, height, bands, view) =>
             new CpuMosaic(width, height, bands, view),
-    ) {}
+    ) {
+        this.photometry = new PhotometricCalibrator(params, frames, links, cameras);
+    }
 
     get isEmpty(): boolean {
         return this.committed === null;
@@ -85,7 +80,7 @@ export class MosaicCompositor {
     }
 
     get vignetting(): number {
-        return this.params().compose.vignetting ? this.vignettingEstimate : 0;
+        return this.photometry.vignetting;
     }
 
     statsFor(id: number): SeamStats | undefined {
@@ -99,7 +94,7 @@ export class MosaicCompositor {
         this.preview = null;
         this.canvas = null;
         this.committedGeometry = null;
-        this.vignettingEstimate = 0;
+        this.photometry.reset();
         this.committedGains.clear();
         this.committedPlacements.clear();
         this.stats.clear();
@@ -216,7 +211,7 @@ export class MosaicCompositor {
             this.cameras.focalFor(reference),
             levelHorizon(active.map((frame) => frame.rotation)),
         );
-        this.balanceExposure(active);
+        this.photometry.calibrate(active);
         return this.canvas;
     }
 
@@ -272,83 +267,6 @@ export class MosaicCompositor {
                 focal: this.cameras.focalFor(frame),
             });
         }
-    }
-
-    private radiusSquared(frame: Keyframe, x: number, y: number): number {
-        const focal = this.cameras.focalFor(frame);
-        const dx = (x - frame.centreX) / focal;
-        const dy = (y - frame.centreY) / focal;
-        return dx * dx + dy * dy;
-    }
-
-    private estimateVignetting(active: Keyframe[], indexOf: Map<number, number>): void {
-        if (!this.params().compose.vignetting) {
-            this.vignettingEstimate = 0;
-            return;
-        }
-        const samples: VignettingSample[] = [];
-        for (const link of this.links.verified) {
-            const a = indexOf.get(link.a);
-            const b = indexOf.get(link.b);
-            if (a === undefined || b === undefined) continue;
-            for (const sample of link.intensities) {
-                samples.push({
-                    a,
-                    b,
-                    radiusSquaredA: this.radiusSquared(active[a], sample.ax, sample.ay),
-                    radiusSquaredB: this.radiusSquared(active[b], sample.bx, sample.by),
-                    intensityA: sample.intensityA,
-                    intensityB: sample.intensityB,
-                });
-            }
-        }
-        this.vignettingEstimate = estimateVignetting(samples, active.length);
-    }
-
-    private correctedMeans(link: PairLink, frameA: Keyframe, frameB: Keyframe): [number, number] {
-        const beta = this.vignetting;
-        if (beta === 0 || link.intensities.length === 0) {
-            return [link.meanIntensityA, link.meanIntensityB];
-        }
-        let sumA = 0;
-        let sumB = 0;
-        for (const sample of link.intensities) {
-            sumA +=
-                sample.intensityA /
-                vignetteAt(this.radiusSquared(frameA, sample.ax, sample.ay), beta);
-            sumB +=
-                sample.intensityB /
-                vignetteAt(this.radiusSquared(frameB, sample.bx, sample.by), beta);
-        }
-        return [sumA / link.intensities.length, sumB / link.intensities.length];
-    }
-
-    private balanceExposure(active: Keyframe[]): void {
-        const indexOf = new Map(active.map((frame, index) => [frame.id, index]));
-        this.estimateVignetting(active, indexOf);
-        if (!this.params().compose.exposureCompensation || active.length === 0) {
-            for (const frame of this.frames.all) frame.gain = 1;
-            return;
-        }
-        const pairs = this.links.verified.flatMap((link) => {
-            const a = indexOf.get(link.a);
-            const b = indexOf.get(link.b);
-            if (a === undefined || b === undefined || link.intensities.length === 0) return [];
-            const [meanA, meanB] = this.correctedMeans(link, active[a], active[b]);
-            return [
-                {
-                    a,
-                    b,
-                    meanA: Math.max(1, meanA),
-                    meanB: Math.max(1, meanB),
-                    weight: Math.max(1, link.overlapPixels),
-                },
-            ];
-        });
-        const gains = this.exposure.solve(pairs, active.length);
-        active.forEach((frame, index) => {
-            frame.gain = gains[index];
-        });
     }
 
     private liveIds(): number[] {
