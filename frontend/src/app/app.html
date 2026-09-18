@@ -23,9 +23,9 @@
 
 @if (askingReset()) {
     <app-confirm-dialog
-        message="Reiniciar o panorama?"
-        [detail]="frames() + ' foto(s) e o mosaico atual serão descartados.'"
-        confirmLabel="Reiniciar"
+        message="Reset the panorama?"
+        [detail]="frames() + ' photo(s) and the current mosaic will be discarded.'"
+        confirmLabel="Reset"
         (confirmed)="confirmReset()"
         (dismissed)="askingReset.set(false)"
     />

@@ -79,7 +79,7 @@ export class MatchDialog {
             context.fillText(text, x + 7, 25);
         };
         caption(`panorama ${payload.trainLabel}`, 8);
-        caption(`nova ${payload.queryLabel}`, offset + 8);
+        caption(`new ${payload.queryLabel}`, offset + 8);
 
         context.strokeStyle = 'rgba(255, 159, 28, 0.85)';
         for (const [points, shift] of [

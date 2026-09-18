@@ -59,4 +59,4 @@ for (let f = 0; f < frames; f++) {
 
 const target = process.argv[2] ?? '/tmp/pano.y4m';
 writeFileSync(target, Buffer.concat(chunks));
-console.log(`escrito ${target} — ${frames} quadros ${width}x${height}, varredura de ${sweep}°`);
+console.log(`wrote ${target} — ${frames} frames ${width}x${height}, ${sweep}° sweep`);

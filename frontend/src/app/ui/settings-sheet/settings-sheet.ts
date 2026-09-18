@@ -11,11 +11,11 @@ import { PARAM_SPECS, ParamSpec } from '../../core/models/param-spec';
 import { StitcherService } from '../../core/services/stitcher.service';
 
 const GROUP_TITLES: Record<ParamGroup, string> = {
-    detect: 'Detecção',
-    match: 'Casamento',
+    detect: 'Detection',
+    match: 'Matching',
     model: 'RANSAC',
     global: 'Global',
-    compose: 'Composição',
+    compose: 'Compositing',
 };
 
 @Component({

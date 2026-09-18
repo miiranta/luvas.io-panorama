@@ -21,7 +21,7 @@ async function handle(request: WorkerRequest): Promise<void> {
         switch (request.kind) {
             case 'params': {
                 pipeline.setParams(request.params);
-                post({ kind: 'progress', detail: 'parâmetros aplicados' });
+                post({ kind: 'progress', detail: 'parameters applied' });
                 break;
             }
             case 'frame': {
@@ -65,10 +65,10 @@ async function handle(request: WorkerRequest): Promise<void> {
                 break;
             }
             case 'resolve': {
-                post({ kind: 'progress', detail: 'casando todos os pares' });
+                post({ kind: 'progress', detail: 'matching all pairs' });
                 await pipeline.resolveFromScratch();
                 publishMosaic();
-                post({ kind: 'progress', detail: 'ordem inferida do grafo' });
+                post({ kind: 'progress', detail: 'order inferred from the graph' });
                 break;
             }
             case 'reset': {
@@ -89,7 +89,7 @@ async function handle(request: WorkerRequest): Promise<void> {
                         [image.pixels],
                     );
                 } else {
-                    post({ kind: 'error', message: 'nada para exportar' });
+                    post({ kind: 'error', message: 'nothing to export' });
                 }
                 break;
             }

@@ -3,9 +3,11 @@ import {
     Component,
     ElementRef,
     OnDestroy,
+    afterNextRender,
     computed,
     inject,
     output,
+    signal,
     viewChild,
 } from '@angular/core';
 import { CameraService } from '../../core/services/camera.service';
@@ -27,6 +29,8 @@ export class CameraStage implements OnDestroy {
     readonly requestReset = output<void>();
     readonly openMatch = output<void>();
 
+    readonly switching = signal(false);
+
     readonly active = this.camera.active;
     readonly cameraError = this.camera.error;
     readonly busy = this.stitcher.busy;
@@ -45,17 +49,22 @@ export class CameraStage implements OnDestroy {
         return preview === null || preview.verified;
     });
     readonly canShoot = computed(() => this.active() && !this.busy() && this.enoughOverlap());
-    readonly canSwitch = computed(() => this.active() && this.camera.devices().length > 1);
+    readonly canSwitch = computed(
+        () => this.active() && !this.switching() && this.camera.devices().length > 1,
+    );
     readonly canCompare = computed(() => this.stitcher.connection() !== null);
     readonly hasWork = computed(() => this.frames() > 0 || this.dropped() > 0);
 
+    constructor() {
+        afterNextRender(async () => {
+            if (!this.camera.active() && (await this.camera.permissionGranted())) {
+                await this.open();
+            }
+        });
+    }
+
     async open(): Promise<void> {
-        const stream = await this.camera.open();
-        const element = this.video()?.nativeElement;
-        if (!stream || !element) return;
-        element.srcObject = stream;
-        await element.play().catch(() => undefined);
-        this.stitcher.trackLive(element);
+        await this.attach(await this.camera.open());
     }
 
     async shoot(): Promise<void> {
@@ -70,9 +79,19 @@ export class CameraStage implements OnDestroy {
     }
 
     async switchCamera(): Promise<void> {
-        const next = this.camera.nextDeviceId();
-        if (!next) return;
-        const stream = await this.camera.open(next);
+        if (this.switching()) return;
+        this.switching.set(true);
+        try {
+            this.stitcher.stopTracking();
+            const element = this.video()?.nativeElement;
+            if (element) element.srcObject = null;
+            await this.attach(await this.camera.switch());
+        } finally {
+            this.switching.set(false);
+        }
+    }
+
+    private async attach(stream: MediaStream | null): Promise<void> {
         const element = this.video()?.nativeElement;
         if (!stream || !element) return;
         element.srcObject = stream;

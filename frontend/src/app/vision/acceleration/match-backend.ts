@@ -235,7 +235,7 @@ const matchCalibration: Calibration<MatchBackend> = {
         return backend.nearest(query, count, train, count) !== null;
     },
     route: (gpu, cpu, threshold) => new RoutedMatchBackend(gpu, cpu, threshold),
-    describeWorkload: (workload) => `${Math.sqrt(workload)} descritores`,
+    describeWorkload: (workload) => `${Math.sqrt(workload)} descriptors`,
 };
 
 export function createMatchSelector(): BackendSelector<MatchBackend> {

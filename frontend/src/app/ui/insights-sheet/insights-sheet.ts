@@ -90,11 +90,11 @@ export class InsightsSheet {
         if (!report) return null;
         const t = report.timings;
         return [
-            { name: 'detectar', value: t.detect + t.describe },
-            { name: 'casar', value: t.match },
-            { name: 'modelo', value: t.model },
+            { name: 'detect', value: t.detect + t.describe },
+            { name: 'match', value: t.match },
+            { name: 'model', value: t.model },
             { name: 'bundle', value: t.bundle },
-            { name: 'compor', value: t.compose },
+            { name: 'compose', value: t.compose },
         ];
     });
 

@@ -24,7 +24,7 @@ import { PairLink } from './pair-link';
 import { PairLinker, isFitted } from './pair-linker';
 
 const PAYLOAD_MARGIN = 4;
-const INTRUDER_REASON = 'sem sobreposição suficiente com as câmeras vizinhas (imagem intrusa)';
+const INTRUDER_REASON = 'not enough overlap with neighbouring cameras (intruder image)';
 
 interface Candidate {
     frame: Keyframe;
@@ -150,7 +150,7 @@ export class StitchPipeline {
             this.reject(
                 frame,
                 report,
-                `cobertura nova de apenas ${angle.toFixed(1)}° (abaixo do limiar de keyframe)`,
+                `only ${angle.toFixed(1)}° of new coverage (below the keyframe threshold)`,
             );
             this.links.replace(
                 this.links.all.filter((link) => link.a !== frame.id && link.b !== frame.id),

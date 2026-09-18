@@ -35,7 +35,7 @@ async function endpoint() {
             await new Promise((r) => setTimeout(r, 250));
         }
     }
-    throw new Error('devtools indisponível');
+    throw new Error('devtools unavailable');
 }
 
 const socket = new WebSocket(await endpoint());
@@ -83,10 +83,10 @@ await wait(3000);
 const setGpu = (gpu) =>
     evaluate(`
         (async () => {
-            document.querySelector('app-camera-stage button[title="Parâmetros"]').click();
+            document.querySelector('app-camera-stage button[title="Parameters"]').click();
             await new Promise((r) => setTimeout(r, 300));
             const more = [...document.querySelectorAll('app-settings-sheet .link')].find((b) =>
-                /mais opções/.test(b.textContent),
+                /more options/.test(b.textContent),
             );
             if (more && document.querySelectorAll('app-settings-sheet .row').length < 20) {
                 more.click();
@@ -128,7 +128,7 @@ const shoot = () =>
 const readInsights = () =>
     evaluate(`
         (async () => {
-            document.querySelector('app-camera-stage button[title="Métricas e grafo"]').click();
+            document.querySelector('app-camera-stage button[title="Metrics and graph"]').click();
             await new Promise((r) => setTimeout(r, 500));
             const stages = [...document.querySelectorAll('app-insights-sheet .bar')].map((bar) => {
                 const cells = bar.querySelectorAll('span, b');
@@ -144,9 +144,9 @@ const readInsights = () =>
             return {
                 stages,
                 frames: Number((chip.match(/([0-9]+)/) ?? [0, 0])[1]),
-                mixer: rows.find((row) => row.startsWith('mistura')) ?? null,
-                matcher: rows.find((row) => row.startsWith('casamento')) ?? null,
-                detector: rows.find((row) => row.startsWith('detec')) ?? null,
+                mixer: rows.find((row) => row.startsWith('blending')) ?? null,
+                matcher: rows.find((row) => row.startsWith('matching')) ?? null,
+                detector: rows.find((row) => row.startsWith('detection')) ?? null,
             };
         })()
     `);
@@ -168,7 +168,7 @@ async function session(gpu, shots) {
         await shoot();
         await wait(1700);
         last = await readInsights();
-        const integrated = last.stages.find(([name]) => name === 'compor');
+        const integrated = last.stages.find(([name]) => name === 'compose');
         if (integrated && integrated[1] > 0) samples.push(last.stages);
     }
     return { ...last, samples };
@@ -190,11 +190,11 @@ for (const [name, run] of [
     ['GPU', withGpu],
     ['CPU', withoutGpu],
 ]) {
-    console.log(`${name} — ${common} quadros integrados comparados`);
+    console.log(`${name} — ${common} merged frames compared`);
     console.log(`  ${run.mixer}`);
     console.log(`  ${run.matcher}`);
     console.log(`  ${run.detector}`);
-    console.log(`  estágios (ms, média) ${JSON.stringify(average(run.samples.slice(0, common)))}`);
+    console.log(`  stages (ms, mean) ${JSON.stringify(average(run.samples.slice(0, common)))}`);
 }
 
 socket.close();

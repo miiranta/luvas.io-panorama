@@ -55,11 +55,11 @@ async function runScenario(
         const { report } = await pipeline.addFrame(`#${i + 1}`, work, compose);
         reports.push(report);
         console.log(
-            `  quadro ${report.label}: kp=${report.keypoints} ` +
+            `  frame ${report.label}: kp=${report.keypoints} ` +
                 `inliers=${report.pairs.map((p) => p.inliers).join('/') || '-'} ` +
                 `f=${report.focal.toFixed(0)} yaw=${report.yaw.toFixed(1)}° ` +
                 `bundle=${report.bundleBefore.toFixed(2)}→${report.bundleAfter.toFixed(2)} ` +
-                `${report.accepted ? 'ok' : 'REJEITADO: ' + report.reason}`,
+                `${report.accepted ? 'ok' : 'REJECTED: ' + report.reason}`,
         );
     }
 
@@ -70,17 +70,17 @@ async function runScenario(
         const compose = scaleImage(view, params.compose.composeWidth);
         const { report } = await pipeline.addFrame('intrusa', work, compose);
         check(
-            `${title}: imagem intrusa rejeitada`,
+            `${title}: intruder image rejected`,
             !report.accepted,
             report.accepted
-                ? 'foi aceita indevidamente'
+                ? 'was wrongly accepted'
                 : `rejeitada (${report.pairs.map((p) => p.inliers).join('/') || '0'} inliers)`,
         );
     }
 
     const accepted = reports.filter((r) => r.accepted);
     check(
-        `${title}: todos os quadros integrados`,
+        `${title}: all frames merged`,
         accepted.length === yaws.length,
         `${accepted.length}/${yaws.length} aceitos`,
     );
@@ -91,25 +91,25 @@ async function runScenario(
         ) /
         (focalTruth * (params.detect.workWidth / viewWidth));
     check(
-        `${title}: focal estimada`,
+        `${title}: focal estimated`,
         focalError < 0.08,
-        `${reports[reports.length - 1].focal.toFixed(1)} px vs ${(focalTruth * (params.detect.workWidth / viewWidth)).toFixed(1)} px esperado (erro ${(focalError * 100).toFixed(1)}%)`,
+        `${reports[reports.length - 1].focal.toFixed(1)} px vs ${(focalTruth * (params.detect.workWidth / viewWidth)).toFixed(1)} px expected (error ${(focalError * 100).toFixed(1)}%)`,
     );
 
     const graph = pipeline.graph();
     const mosaic = pipeline.mosaicPayload();
     check(
-        `${title}: mosaico com cobertura`,
+        `${title}: mosaic has coverage`,
         mosaic !== null && mosaic.spanHorizontal > 5,
         mosaic
             ? `${mosaic.spanHorizontal.toFixed(1)}°×${mosaic.spanVertical.toFixed(1)}°, ` +
                   `${mosaic.width}×${mosaic.height}, ${mosaic.fillPercent.toFixed(1)}% preenchido`
-            : 'sem mosaico',
+            : 'no mosaic',
     );
     check(
-        `${title}: grafo conexo`,
+        `${title}: graph connected`,
         graph.components === 1 || (options.intruder === true && graph.components === 2),
-        `${graph.components} componente(s), ordem inferida ${graph.order.join('→')}`,
+        `${graph.components} component(s), inferred order ${graph.order.join('→')}`,
     );
 
     const pairErrors: number[] = [];
@@ -123,9 +123,9 @@ async function runScenario(
     void truth;
     const worstYaw = pairErrors.length > 0 ? Math.max(...pairErrors) : Number.POSITIVE_INFINITY;
     check(
-        `${title}: yaw recuperado`,
+        `${title}: yaw recovered`,
         worstYaw < 1.5,
-        `pior desvio ${worstYaw.toFixed(2)}° (ground truth ${yaws.join('/')})`,
+        `worst offset ${worstYaw.toFixed(2)}° (ground truth ${yaws.join('/')})`,
     );
 
     if (options.moving) {
@@ -133,9 +133,9 @@ async function runScenario(
             .filter((r) => r.accepted && r.overlapPixels > 0)
             .map((r) => (r.inconsistentPixels / r.overlapPixels) * 100);
         check(
-            `${title}: pixels inconsistentes detectados`,
+            `${title}: inconsistent pixels detected`,
             ghosts.some((g) => g > 0.05),
-            `máx ${Math.max(0, ...ghosts).toFixed(2)}% da sobreposição marcada como objeto móvel`,
+            `max ${Math.max(0, ...ghosts).toFixed(2)}% of the overlap flagged as a moving object`,
         );
     }
 }
@@ -162,13 +162,13 @@ function runUnitChecks(): void {
     const h = mat3Multiply(k, mat3Multiply(rotation, kInv));
     const estimated = focalFromHomography(h, 320, 240);
     check(
-        'focal a partir da homografia',
+        'focal from the homography',
         estimated !== null && Math.abs(estimated - focal) / focal < 0.02,
         `${estimated?.toFixed(1)} px vs ${focal} px`,
     );
     const recovered = relativeRotationFromHomography(h, focal, 320, 240);
     check(
-        'rotação a partir da homografia',
+        'rotation from the homography',
         angleBetween(recovered, rotation) < 0.2,
         `desvio ${angleBetween(recovered, rotation).toFixed(3)}°`,
     );
@@ -181,7 +181,7 @@ fast.detect.workWidth = 480;
 
 runUnitChecks();
 await runScenario(
-    'sequência horizontal',
+    'horizontal sequence',
     structuredClone(fast),
     [0, 12, 24, 36, 48, 60],
     [0, 0, 0, 0, 0, 0],
@@ -190,7 +190,7 @@ await runScenario(
     },
 );
 await runScenario(
-    'grade 2 fileiras',
+    '2-row grid',
     structuredClone(fast),
     [0, 14, 28, 28, 14, 0],
     [0, 0, 0, 12, 12, 12],
@@ -200,17 +200,17 @@ await runScenario(
 const cylindrical = structuredClone(fast);
 cylindrical.compose.surface = 'cylindrical';
 cylindrical.compose.blend = 'feather';
-await runScenario('cilíndrica + feather', cylindrical, [0, 15, 30, 45], [0, 0, 0, 0]);
+await runScenario('cylindrical + feather', cylindrical, [0, 15, 30, 45], [0, 0, 0, 0]);
 
 const planar = structuredClone(fast);
 planar.compose.surface = 'planar';
 planar.compose.blend = 'average';
 planar.compose.seam = false;
 planar.model.model = 'affine';
-await runScenario('planar + afim + média', planar, [0, 8, 16], [0, 0, 0]);
+await runScenario('planar + affine + average', planar, [0, 8, 16], [0, 0, 0]);
 
 async function runScalingCheck(): Promise<void> {
-    console.log('\n=== custo por quadro com N crescente ===');
+    console.log('\n=== per-frame cost as N grows ===');
     const params = structuredClone(DEFAULT_PARAMS);
     params.detect.workWidth = 480;
     params.compose.composeWidth = 480;
@@ -253,9 +253,9 @@ async function runScalingCheck(): Promise<void> {
         if (sample.index % 4 === 0 || sample.index <= 2) {
             console.log(
                 `  N=${String(sample.index).padStart(2)}: total=${sample.total.toFixed(0)}ms ` +
-                    `[detectar ${sample.detect.toFixed(0)} casar ${sample.match.toFixed(0)} ` +
-                    `bundle ${sample.bundle.toFixed(0)} compor ${sample.compose.toFixed(0)}] ` +
-                    `pares=${sample.pairs}`,
+                    `[detect ${sample.detect.toFixed(0)} match ${sample.match.toFixed(0)} ` +
+                    `bundle ${sample.bundle.toFixed(0)} compose ${sample.compose.toFixed(0)}] ` +
+                    `pairs=${sample.pairs}`,
             );
         }
     }
@@ -266,24 +266,24 @@ async function runScalingCheck(): Promise<void> {
     const early = firstHalf.reduce((a, s) => a + s.total, 0) / firstHalf.length;
     const late = secondHalf.reduce((a, s) => a + s.total, 0) / secondHalf.length;
     check(
-        'custo por quadro estável após a janela encher',
+        'per-frame cost stable once the window fills',
         late < early * 1.5,
         `N=${window + 2}..${window + 1 + firstHalf.length}: ${early.toFixed(0)}ms vs ` +
             `N=${window + 2 + firstHalf.length}..${count}: ${late.toFixed(0)}ms`,
     );
     const pairCounts = samples.map((s) => s.pairs);
     check(
-        'pares avaliados limitados pelo índice espacial',
+        'evaluated pairs bounded by the spatial index',
         Math.max(...pairCounts) <= DEFAULT_PARAMS.global.candidateNeighbours,
-        `máximo de ${Math.max(...pairCounts)} pares por quadro (limite ${DEFAULT_PARAMS.global.candidateNeighbours})`,
+        `at most ${Math.max(...pairCounts)} pairs per frame (limit ${DEFAULT_PARAMS.global.candidateNeighbours})`,
     );
     const graph = pipeline.graph();
     const accepted = graph.nodes.filter((n) => !n.rejected).length;
     check(
-        'varredura de 275° integrada',
+        '275° sweep merged',
         accepted >= count - 2,
-        `${accepted}/${count} câmeras no componente principal, ` +
-            `${pipeline.coveragePercent().toFixed(1)}% da caixa preenchido`,
+        `${accepted}/${count} cameras in the main component, ` +
+            `${pipeline.coveragePercent().toFixed(1)}% of the box filled`,
     );
 }
 
@@ -291,7 +291,7 @@ await runScalingCheck();
 
 const failures = results.filter((r) => !r.pass);
 console.log(
-    `\n${results.length - failures.length}/${results.length} verificações passaram` +
+    `\n${results.length - failures.length}/${results.length} checks passed` +
         (failures.length > 0 ? `\nfalhas: ${failures.map((f) => f.name).join('; ')}` : ''),
 );
 process.exit(failures.length > 0 ? 1 : 0);

@@ -1,12 +1,12 @@
 <canvas #canvas></canvas>
 
 @if (overlay(); as info) {
-    <span class="legend"> <i class="from"></i> no panorama <i class="to"></i> agora </span>
+    <span class="legend"> <i class="from"></i> in panorama <i class="to"></i> now </span>
     <span class="pill" [class.weak]="!info.verified" [class.live]="info.live">
         <span class="verdict">
-            {{ info.verified ? 'pode fotografar' : 'sobreposição insuficiente' }}
+            {{ info.verified ? 'ready to shoot' : 'not enough overlap' }}
         </span>
-        <b>{{ info.inliers }} pontos</b>
+        <b>{{ info.inliers }} points</b>
         @if (info.inliers > 0) {
             <i>{{ info.error.toFixed(1) }} px</i>
         }

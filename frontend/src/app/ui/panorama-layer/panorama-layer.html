@@ -1,5 +1,5 @@
 @if (mosaic()) {
-    <div class="minimap" (click)="toggle.emit()" [title]="expanded() ? 'Recolher' : 'Ampliar'">
+    <div class="minimap" (click)="toggle.emit()" [title]="expanded() ? 'Collapse' : 'Expand'">
         <canvas #canvas></canvas>
 
         <div class="card-actions">
@@ -9,7 +9,7 @@
                 [class.working]="saving()"
                 [disabled]="saving()"
                 (click)="save($event)"
-                title="Exportar PNG"
+                title="Export PNG"
             >
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                     <path
@@ -41,7 +41,7 @@
                     type="button"
                     class="round-action close"
                     (click)="dismiss($event)"
-                    title="Fechar"
+                    title="Close"
                 >
                     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                         <path

@@ -12,5 +12,5 @@ export class BusyVeil {
     private readonly stitcher = inject(StitcherService);
 
     readonly visible = computed(() => this.stitcher.busy() || !this.stitcher.ready());
-    readonly label = computed(() => (this.stitcher.ready() ? this.stitcher.status() : 'iniciando'));
+    readonly label = computed(() => (this.stitcher.ready() ? this.stitcher.status() : 'starting'));
 }

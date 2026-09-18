@@ -35,7 +35,7 @@ export class StitcherService {
     });
     readonly busy = signal(false);
     readonly ready = signal(false);
-    readonly status = signal('aguardando câmera');
+    readonly status = signal('waiting for camera');
     readonly error = signal<string | null>(null);
 
     readonly acceptedFrames = computed(() => this.reports().filter((r) => r.accepted).length);
@@ -69,8 +69,8 @@ export class StitcherService {
                 if (message.connection) this.connection.set(message.connection);
                 this.status.set(
                     message.report.accepted
-                        ? `quadro ${message.report.label} integrado`
-                        : `quadro ${message.report.label} descartado`,
+                        ? `frame ${message.report.label} merged`
+                        : `frame ${message.report.label} discarded`,
                 );
                 this.busy.set(false);
                 break;
@@ -126,7 +126,7 @@ export class StitcherService {
     recompose(): void {
         if (this.reports().length === 0) return;
         this.busy.set(true);
-        this.status.set('recompondo mosaico');
+        this.status.set('recompositing mosaic');
         this.send({ kind: 'recompose' });
         queueMicrotask(() => this.busy.set(false));
     }
@@ -134,7 +134,7 @@ export class StitcherService {
     resolveFromScratch(): void {
         if (this.reports().length < 2) return;
         this.busy.set(true);
-        this.status.set('reordenando a partir do grafo');
+        this.status.set('reordering from the graph');
         this.send({ kind: 'resolve' });
         queueMicrotask(() => this.busy.set(false));
     }
@@ -190,14 +190,14 @@ export class StitcherService {
         const width = source.videoWidth;
         const height = source.videoHeight;
         if (!width || !height) {
-            this.error.set('câmera sem quadro disponível');
+            this.error.set('camera has no frame available');
             this.busy.set(false);
             return;
         }
         const snapshot = new OffscreenCanvas(width, height);
         const snapshotContext = snapshot.getContext('2d');
         if (!snapshotContext) {
-            this.error.set('falha ao congelar o quadro da câmera');
+            this.error.set('failed to freeze the camera frame');
             this.busy.set(false);
             return;
         }
@@ -205,13 +205,13 @@ export class StitcherService {
         const work = this.rasterize(snapshot, width, height, params.detect.workWidth);
         const compose = this.rasterize(snapshot, width, height, params.compose.composeWidth);
         if (!work || !compose) {
-            this.error.set('falha ao ler o quadro da câmera');
+            this.error.set('failed to read the camera frame');
             this.busy.set(false);
             return;
         }
         this.captureIndex += 1;
         const label = `#${String(this.captureIndex).padStart(2, '0')}`;
-        this.status.set(`processando ${label}`);
+        this.status.set(`processing ${label}`);
         this.send(
             {
                 kind: 'frame',
@@ -250,7 +250,7 @@ export class StitcherService {
     exportPanorama(): Promise<Blob> {
         return new Promise((resolve, reject) => {
             if (!this.mosaic()) {
-                reject(new Error('mosaico vazio'));
+                reject(new Error('empty mosaic'));
                 return;
             }
             this.busy.set(true);
@@ -269,7 +269,7 @@ export class StitcherService {
         this.graph.set({ nodes: [], edges: [], order: [], reference: -1, components: 0 });
         this.captureIndex = 0;
         this.error.set(null);
-        this.status.set('pipeline reiniciado');
+        this.status.set('pipeline reset');
         this.send({ kind: 'reset' });
     }
 }

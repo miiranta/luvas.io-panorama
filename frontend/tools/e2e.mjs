@@ -42,7 +42,7 @@ async function endpoint() {
             await new Promise((resolve) => setTimeout(resolve, 250));
         }
     }
-    throw new Error(`devtools indisponível\n${log.join('')}`);
+    throw new Error(`devtools unavailable\n${log.join('')}`);
 }
 
 const wsUrl = await endpoint();
@@ -101,7 +101,7 @@ async function evaluate(expression) {
         returnByValue: true,
     });
     if (result.exceptionDetails) {
-        throw new Error(`erro ao avaliar: ${result.exceptionDetails.text}`);
+        throw new Error(`evaluation error: ${result.exceptionDetails.text}`);
     }
     return result.result.value;
 }
@@ -127,7 +127,7 @@ try {
     await wait(2500);
 
     const title = await evaluate('document.title');
-    check('app carregou', typeof title === 'string', `title="${title}"`);
+    check('app loaded', typeof title === 'string', `title="${title}"`);
 
     await evaluate(`
     (() => {
@@ -152,10 +152,10 @@ try {
     })()
   `);
     check(
-        'câmera falsa aberta via getUserMedia',
+        'fake camera opened via getUserMedia',
         cameraState.ready >= 2 && cameraState.width > 0,
         `readyState=${cameraState.ready} ${cameraState.width}x${cameraState.height}` +
-            (cameraState.error ? ` erro="${cameraState.error}"` : ''),
+            (cameraState.error ? ` error="${cameraState.error}"` : ''),
     );
     await screenshot('01-camera.png');
 
@@ -195,19 +195,19 @@ try {
     })()
   `);
     check(
-        'mosaico acumulado no canvas',
+        'mosaic accumulated on the canvas',
         hud.canvas !== null && hud.coverage > 0.5,
-        `${hud.canvas?.width}x${hud.canvas?.height}, ${hud.coverage.toFixed(2)}% de pixels escritos`,
+        `${hud.canvas?.width}x${hud.canvas?.height}, ${hud.coverage.toFixed(2)}% of pixels written`,
     );
     check(
-        'HUD mostra contagem e ângulo coberto',
+        'HUD shows count and covered angle',
         hud.chips.length > 1 && /°/.test(hud.chips.join(' ')),
         hud.chips.join(' | '),
     );
     check(
-        'comparação abre por botão (sem PiP sobre a câmera)',
+        'comparison opens from a button (no PiP over the camera)',
         hud.compareEnabled && !hud.pip,
-        `botão=${hud.compareEnabled} pip=${hud.pip}`,
+        `button=${hud.compareEnabled} pip=${hud.pip}`,
     );
     const liveTracking = await evaluate(`
     (async () => {
@@ -232,10 +232,10 @@ try {
   `);
     const liveFrames = liveTracking.filter((s) => s.live && s.drawn > 200);
     check(
-        'rastreamento ao vivo contra o panorama',
+        'live tracking against the panorama',
         liveFrames.length >= 3,
-        `${liveFrames.length}/${liveTracking.length} amostras com sobreposição viva — ` +
-            `ex. "${liveFrames[0]?.pill ?? liveTracking[0]?.pill}"`,
+        `${liveFrames.length}/${liveTracking.length} samples with live overlap — ` +
+            `e.g. "${liveFrames[0]?.pill ?? liveTracking[0]?.pill}"`,
     );
     await screenshot('06-live.png');
 
@@ -255,15 +255,15 @@ try {
     })()
   `);
     check(
-        'linhas de casamento sobre a câmera',
+        'match lines over the camera',
         tracks !== null && tracks.drawn > 500 && tracks.pill !== null,
         tracks
-            ? `${tracks.drawn} px desenhados em ${tracks.width}x${tracks.height}, "${tracks.pill}"`
-            : 'camada ausente',
+            ? `${tracks.drawn} px drawn in ${tracks.width}x${tracks.height}, "${tracks.pill}"`
+            : 'layer missing',
     );
     await screenshot('02-shots.png');
 
-    await evaluate(`document.querySelector('app-camera-stage button[title="Parâmetros"]').click()`);
+    await evaluate(`document.querySelector('app-camera-stage button[title="Parameters"]').click()`);
     await wait(700);
     const settings = await evaluate(`
     (() => {
@@ -275,9 +275,9 @@ try {
     })()
   `);
     check(
-        'overlay de parâmetros abre',
+        'parameters overlay opens',
         settings.open && settings.rows > 4,
-        `${settings.rows} controles`,
+        `${settings.rows} controls`,
     );
 
     const selectState = await evaluate(`
@@ -287,7 +287,7 @@ try {
     })()
   `);
     check(
-        'selects refletem os parâmetros ativos',
+        'selects reflect the active parameters',
         selectState.includes('homography') &&
             selectState.includes('planar') &&
             selectState.includes('multiband'),
@@ -316,7 +316,7 @@ try {
     })()
   `);
     check(
-        'troca de superfície recompõe em tempo real',
+        'switching surface recomposites in real time',
         afterSurface !== null && afterSurface.height !== hud.canvas.height,
         `${hud.canvas.width}x${hud.canvas.height} → ${afterSurface?.width}x${afterSurface?.height}`,
     );
@@ -324,7 +324,7 @@ try {
     await evaluate(`document.querySelector('app-settings-sheet .backdrop').click()`);
     await wait(500);
     await evaluate(
-        `document.querySelector('app-camera-stage button[title="Métricas e grafo"]').click()`,
+        `document.querySelector('app-camera-stage button[title="Metrics and graph"]').click()`,
     );
     await wait(900);
     const insights = await evaluate(`
@@ -339,11 +339,11 @@ try {
     })()
   `);
     check(
-        'grafo de vizinhança renderizado',
+        'neighbourhood graph rendered',
         insights !== null && insights.nodes > 1 && insights.edges > 0,
         insights
-            ? `${insights.nodes} nós, ${insights.edges} arestas, ordem ${insights.order}`
-            : 'ausente',
+            ? `${insights.nodes} nodes, ${insights.edges} edges, order ${insights.order}`
+            : 'missing',
     );
     await screenshot('04-insights.png');
 
@@ -353,7 +353,7 @@ try {
     const resetFlow = await evaluate(`
     (async () => {
       const button = document.querySelector('app-camera-stage button.reset');
-      if (!button) return { step: 'sem botão' };
+      if (!button) return { step: 'no button' };
       button.click();
       await new Promise((r) => setTimeout(r, 400));
       const dialog = document.querySelector('app-confirm-dialog .dialog');
@@ -370,9 +370,9 @@ try {
     })()
   `);
     check(
-        'reiniciar pede confirmação e cancela sem apagar',
-        resetFlow.opened && resetFlow.dismissed && /fotos/.test(resetFlow.chip ?? ''),
-        `"${resetFlow.message}" → cancelado, HUD segue em "${resetFlow.chip}"`,
+        'reset asks for confirmation and cancels without clearing',
+        resetFlow.opened && resetFlow.dismissed && /photos/.test(resetFlow.chip ?? ''),
+        `"${resetFlow.message}" → cancelled, HUD still shows "${resetFlow.chip}"`,
     );
 
     const iconGeometry = await evaluate(`
@@ -395,9 +395,9 @@ try {
         0,
     );
     check(
-        'ícones centrados nos botões',
+        'icons centred in their buttons',
         iconGeometry.length >= 3 && worst < 0.75,
-        `${iconGeometry.length} botões, desvio máximo ${worst.toFixed(2)} px`,
+        `${iconGeometry.length} buttons, max offset ${worst.toFixed(2)} px`,
     );
 
     const stacking = await evaluate(`
@@ -428,11 +428,11 @@ try {
     })()
   `);
     check(
-        'linhas só sobre a câmera, atrás dos controles',
+        'lines only over the camera, behind the controls',
         stacking.hostDisplay === 'contents' &&
             stacking.feed < stacking.lines &&
             stacking.below.length === 0,
-        `vídeo z=${stacking.feed}, linhas z=${stacking.lines}, abaixo das linhas: ${stacking.below.join(', ') || 'nenhum'}`,
+        `video z=${stacking.feed}, lines z=${stacking.lines}, below the lines: ${stacking.below.join(', ') || 'none'}`,
     );
 
     const closeFlow = await evaluate(`
@@ -472,14 +472,14 @@ try {
     })()
   `);
     check(
-        'popup de comparação abre e fecha pelo X',
+        'comparison popup opens and closes with the X',
         closeFlow.tag !== null && closeFlow.matchCloseInside && closeFlow.matchClosed,
-        `${closeFlow.tag ?? 'sem tag'} · X dentro=${closeFlow.matchCloseInside} fechou=${closeFlow.matchClosed}`,
+        `${closeFlow.tag ?? 'no tag'} · X inside=${closeFlow.matchCloseInside} closed=${closeFlow.matchClosed}`,
     );
     check(
-        'minimapa ampliado: X e exportar visíveis e sem sobreposição',
+        'expanded minimap: X and export visible and not overlapping',
         closeFlow.minimapButtons && closeFlow.minimapClosed,
-        `botões ok=${closeFlow.minimapButtons} fechou=${closeFlow.minimapClosed}`,
+        `buttons ok=${closeFlow.minimapButtons} closed=${closeFlow.minimapClosed}`,
     );
 
     const longRun = await evaluate(`
@@ -493,26 +493,26 @@ try {
         .querySelector('app-camera-stage .chip')
         ?.textContent?.replace(/\\s+/g, ' ')
         .trim();
-      document.querySelector('app-camera-stage button[title="Métricas e grafo"]').click();
+      document.querySelector('app-camera-stage button[title="Metrics and graph"]').click();
       await new Promise((r) => setTimeout(r, 700));
       const rows = [...document.querySelectorAll('app-insights-sheet dl div')].map((row) =>
         row.textContent.replace(/\\s+/g, ' ').trim(),
       );
       document.querySelector('app-insights-sheet .backdrop')?.click();
       await new Promise((r) => setTimeout(r, 300));
-      return { chip, memory: rows.find((row) => row.startsWith('memória')) ?? null };
+      return { chip, memory: rows.find((row) => row.startsWith('memory')) ?? null };
     })()
   `);
-    const longCount = Number(/([0-9]+) fotos/.exec(longRun.chip ?? '')?.[1] ?? 0);
+    const longCount = Number(/([0-9]+) photos/.exec(longRun.chip ?? '')?.[1] ?? 0);
     check(
-        'sessão longa continua integrando',
+        'long session keeps merging',
         longCount >= 8 && longRun.memory !== null,
-        `${longRun.chip} (${longCount} aceitas), ${longRun.memory}`,
+        `${longRun.chip} (${longCount} accepted), ${longRun.memory}`,
     );
 
     const gpuState = await evaluate(`
     (async () => {
-      document.querySelector('app-camera-stage button[title="Métricas e grafo"]').click();
+      document.querySelector('app-camera-stage button[title="Metrics and graph"]').click();
       await new Promise((r) => setTimeout(r, 600));
       const rows = [...document.querySelectorAll('app-insights-sheet dl div')].map((row) =>
         row.textContent.replace(/\\s+/g, ' ').trim(),
@@ -520,31 +520,31 @@ try {
       document.querySelector('app-insights-sheet .backdrop')?.click();
       await new Promise((r) => setTimeout(r, 250));
       return {
-        mixer: rows.find((row) => row.startsWith('mistura')) ?? null,
-        matcher: rows.find((row) => row.startsWith('casamento')) ?? null,
-        detector: rows.find((row) => row.startsWith('detec')) ?? null,
+        mixer: rows.find((row) => row.startsWith('blending')) ?? null,
+        matcher: rows.find((row) => row.startsWith('matching')) ?? null,
+        detector: rows.find((row) => row.startsWith('detection')) ?? null,
       };
     })()
   `);
     check(
-        'mistura multibanda acelerada por WebGL2',
+        'multiband blending accelerated by WebGL2',
         gpuState?.mixer != null && /webgl2/.test(gpuState.mixer),
-        gpuState?.mixer ?? 'ausente',
+        gpuState?.mixer ?? 'missing',
     );
     check(
-        'casamento acelerado por WebGL2 (igual à CPU bit a bit)',
+        'matching accelerated by WebGL2 (bit-identical to the CPU)',
         gpuState?.matcher != null && /webgl2/.test(gpuState.matcher),
-        gpuState?.matcher ?? 'ausente',
+        gpuState?.matcher ?? 'missing',
     );
     check(
-        'detecção acelerada por WebGL2 (resposta conferida contra a CPU)',
+        'detection accelerated by WebGL2 (response checked against the CPU)',
         gpuState?.detector != null && /webgl2/.test(gpuState.detector),
-        gpuState?.detector ?? 'ausente',
+        gpuState?.detector ?? 'missing',
     );
 
     const surfaceSwap = await evaluate(`
     (async () => {
-      document.querySelector('app-camera-stage button[title="Parâmetros"]').click();
+      document.querySelector('app-camera-stage button[title="Parameters"]').click();
       await new Promise((r) => setTimeout(r, 400));
       const selects = [...document.querySelectorAll('app-settings-sheet select')];
       const target = selects.find((s) => [...s.options].some((o) => o.value === 'spherical'));
@@ -564,9 +564,9 @@ try {
     })()
   `);
     check(
-        'recomposição após arquivar preserva as fotos antigas',
+        'recompositing after archiving keeps the old photos',
         surfaceSwap.filled > 0 && surfaceSwap.filled / surfaceSwap.total > 0.3,
-        `${((surfaceSwap.filled / (surfaceSwap.total || 1)) * 100).toFixed(1)}% do recorte preenchido`,
+        `${((surfaceSwap.filled / (surfaceSwap.total || 1)) * 100).toFixed(1)}% of the crop filled`,
     );
 
     const resetClears = await evaluate(`
@@ -597,13 +597,13 @@ try {
     })()
   `);
     check(
-        'reiniciar limpa pontos, minimapa e HUD',
+        'reset clears points, minimap and HUD',
         resetClears.before > 200 &&
             resetClears.after === 0 &&
             !resetClears.minimap &&
             !resetClears.pill &&
-            /0 fotos/.test(resetClears.chip ?? ''),
-        `${resetClears.before} → ${resetClears.after} px, minimapa=${resetClears.minimap}, ` +
+            /0 photos/.test(resetClears.chip ?? ''),
+        `${resetClears.before} → ${resetClears.after} px, minimap=${resetClears.minimap}, ` +
             `HUD="${resetClears.chip}"`,
     );
 
@@ -617,22 +617,20 @@ try {
     })()
   `);
     check(
-        'exportação produz PNG',
+        'export produces a PNG',
         exported === -1 || exported > 5000,
-        exported === -1
-            ? 'sem mosaico após reiniciar (esperado)'
-            : `${(exported / 1024).toFixed(0)} kB`,
+        exported === -1 ? 'no mosaic after reset (expected)' : `${(exported / 1024).toFixed(0)} kB`,
     );
 
     check(
-        'sem erros de console',
+        'no console errors',
         consoleErrors.length === 0,
-        consoleErrors.length === 0 ? 'nenhum' : consoleErrors.slice(0, 3).join(' | '),
+        consoleErrors.length === 0 ? 'none' : consoleErrors.slice(0, 3).join(' | '),
     );
 
     await screenshot('05-final.png');
 } catch (error) {
-    check('execução sem exceções', false, error instanceof Error ? error.message : String(error));
+    check('run without exceptions', false, error instanceof Error ? error.message : String(error));
 } finally {
     socket.close();
     chrome.kill('SIGKILL');
@@ -640,8 +638,8 @@ try {
 
 const failures = results.filter((r) => !r.pass);
 console.log(
-    `\n${results.length - failures.length}/${results.length} verificações E2E passaram` +
+    `\n${results.length - failures.length}/${results.length} E2E checks passed` +
         (failures.length ? `\nfalhas: ${failures.map((f) => f.name).join('; ')}` : ''),
 );
-console.log(`capturas em ${OUT}`);
+console.log(`screenshots in ${OUT}`);
 process.exit(failures.length ? 1 : 0);

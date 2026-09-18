@@ -31,7 +31,7 @@ export class PanoramaLayer {
     readonly size = computed(() => {
         const mosaic = this.mosaic();
         if (!mosaic) return '';
-        return `${mosaic.width}×${mosaic.height} · ${mosaic.surface} · ${mosaic.frames} fotos`;
+        return `${mosaic.width}×${mosaic.height} · ${mosaic.surface} · ${mosaic.frames} photos`;
     });
 
     constructor() {

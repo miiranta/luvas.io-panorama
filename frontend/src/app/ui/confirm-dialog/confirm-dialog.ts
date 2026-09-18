@@ -9,7 +9,7 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 export class ConfirmDialog {
     readonly message = input.required<string>();
     readonly detail = input('');
-    readonly confirmLabel = input('Confirmar');
+    readonly confirmLabel = input('Confirm');
     readonly confirmed = output<void>();
     readonly dismissed = output<void>();
 }

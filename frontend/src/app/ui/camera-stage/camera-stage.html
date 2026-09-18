@@ -1,24 +1,24 @@
-<video #video playsinline muted class="feed"></video>
+<video #video autoplay playsinline muted class="feed"></video>
 
-@if (!active()) {
+@if (!active() && !switching()) {
     <button type="button" class="start" (click)="open()">
         <span class="lens"></span>
-        Abrir câmera
+        Open camera
     </button>
 }
 
 <div class="hud">
     <span class="chip">
-        <b>{{ frames() }}</b> fotos
+        <b>{{ frames() }}</b> photos
         @if (dropped() > 0) {
-            <i>· {{ dropped() }} fora</i>
+            <i>· {{ dropped() }} dropped</i>
         }
     </span>
     @if (span(); as angle) {
-        <span class="chip" title="Ângulo de visão coberto pelo panorama">{{ angle }}</span>
+        <span class="chip" title="Field of view covered by the panorama">{{ angle }}</span>
     }
     <span class="spacer"></span>
-    <button type="button" class="icon" title="Métricas e grafo" (click)="openInsights.emit()">
+    <button type="button" class="icon" title="Metrics and graph" (click)="openInsights.emit()">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="2.4" />
             <circle cx="12" cy="7.6" r="1.5" fill="currentColor" />
@@ -31,7 +31,7 @@
             />
         </svg>
     </button>
-    <button type="button" class="icon" title="Parâmetros" (click)="openSettings.emit()">
+    <button type="button" class="icon" title="Parameters" (click)="openSettings.emit()">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
             <path
                 d="M12 3.4l1.5 2.2 2.6-.6.5 2.6 2.3 1.3-1.4 2.3 1.4 2.3-2.3 1.3-.5 2.6-2.6-.6L12 20.6l-1.5-2.2-2.6.6-.5-2.6-2.3-1.3 1.4-2.3-1.4-2.3 2.3-1.3.5-2.6 2.6.6z"
@@ -51,7 +51,7 @@
 
 <div class="dock">
     @if (canSwitch()) {
-        <button type="button" class="icon flip" title="Trocar de câmera" (click)="switchCamera()">
+        <button type="button" class="icon flip" title="Switch camera" (click)="switchCamera()">
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                 <path
                     d="M4.2 9.6A8 8 0 0 1 18.6 7.4"
@@ -86,14 +86,14 @@
         [class.blocked]="!enoughOverlap()"
         [disabled]="!canShoot()"
         (click)="shoot()"
-        [title]="enoughOverlap() ? 'Tirar foto' : 'Sobreposição insuficiente'"
+        [title]="enoughOverlap() ? 'Take photo' : 'Not enough overlap'"
     ></button>
 
     <div class="side-actions">
         <button
             type="button"
             class="icon compare"
-            title="Comparar com a foto anterior"
+            title="Compare with the previous photo"
             [disabled]="!canCompare()"
             (click)="openMatch.emit()"
         >
@@ -130,7 +130,7 @@
         <button
             type="button"
             class="icon reset"
-            title="Reiniciar panorama"
+            title="Reset panorama"
             [disabled]="!hasWork()"
             (click)="requestReset.emit()"
         >

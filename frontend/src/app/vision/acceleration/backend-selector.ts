@@ -60,7 +60,7 @@ export class BackendSelector<T extends Backend> {
     }
 
     describe(enabled: boolean): string {
-        if (!enabled) return 'cpu (desligado)';
+        if (!enabled) return 'cpu (disabled)';
         this.choice ??= this.calibrate();
         const { backend, reason, gpuMs, cpuMs } = this.choice;
         const timing =
@@ -69,7 +69,7 @@ export class BackendSelector<T extends Backend> {
                 : '';
         const failures =
             backend instanceof RoutedBackend && backend.failureCount > 0
-                ? ` · ${backend.failureCount} falhas`
+                ? ` · ${backend.failureCount} failures`
                 : '';
         return `${backend.kind} (${reason})${timing}${failures}`;
     }
@@ -83,18 +83,17 @@ export class BackendSelector<T extends Backend> {
             cpuMs: null,
         });
         const context = GlContext.shared();
-        if (!context) return fallback('sem webgl2');
-        if (context.isSoftware) return fallback('gl em software');
+        if (!context) return fallback('no webgl2');
+        if (context.isSoftware) return fallback('software gl');
         const gpu = this.calibration.createGpu(context);
-        if (!gpu) return fallback('webgl2 incompleto');
+        if (!gpu) return fallback('incomplete webgl2');
         let gpuMs = 0;
         let cpuMs = 0;
         for (const workload of workloads) {
-            if (!this.calibration.agrees(gpu, cpu, workload))
-                return fallback('divergência gpu/cpu');
+            if (!this.calibration.agrees(gpu, cpu, workload)) return fallback('gpu/cpu mismatch');
             const gpuTime = this.time(gpu, workload);
             const cpuTime = this.time(cpu, workload);
-            if (gpuTime === null || cpuTime === null) return fallback('medição falhou');
+            if (gpuTime === null || cpuTime === null) return fallback('measurement failed');
             gpuMs = gpuTime;
             cpuMs = cpuTime;
             if (gpuMs < cpuMs * REQUIRED_SPEEDUP) {
@@ -102,14 +101,14 @@ export class BackendSelector<T extends Backend> {
                 return {
                     backend: this.calibration.route(gpu, cpu, first ? 0 : workload),
                     reason: first
-                        ? 'gpu mais rápida'
-                        : `gpu a partir de ${this.calibration.describeWorkload(workload)}`,
+                        ? 'gpu faster'
+                        : `gpu from ${this.calibration.describeWorkload(workload)}`,
                     gpuMs,
                     cpuMs,
                 };
             }
         }
-        return { backend: cpu, reason: 'cpu mais rápida', gpuMs, cpuMs };
+        return { backend: cpu, reason: 'cpu faster', gpuMs, cpuMs };
     }
 
     private time(backend: T, workload: number): number | null {
