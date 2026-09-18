@@ -29,6 +29,7 @@ export function fastSegmentTest(
     const response = new Float32Array(width * height);
     const threshold = params.fastThreshold;
     const arc = Math.max(9, Math.min(16, Math.round(params.fastArc)));
+    const compass = Math.floor(arc / 4);
     const ring = new Int32Array(16);
     for (let i = 0; i < 16; i++) ring[i] = FAST_OFFSETS[i][1] * width + FAST_OFFSETS[i][0];
     for (let y = 3; y < height - 3; y++) {
@@ -44,7 +45,7 @@ export function fastSegmentTest(
                 if (v > hi) brighter++;
                 else if (v < lo) darker++;
             }
-            if (brighter < 3 && darker < 3) continue;
+            if (brighter < compass && darker < compass) continue;
             let runBright = 0;
             let runDark = 0;
             let bestBright = 0;

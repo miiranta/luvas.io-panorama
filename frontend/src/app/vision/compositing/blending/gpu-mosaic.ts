@@ -124,9 +124,9 @@ interface GpuPrograms {
 const programCache = new WeakMap<GlContext, GpuPrograms | null>();
 
 interface SharedPools {
-    scratch: GlTarget[];
-    regions: GlTarget[];
-    final: GlTarget[];
+    scratch: (GlTarget | null)[];
+    regions: (GlTarget | null)[];
+    final: (GlTarget | null)[];
 }
 
 const poolCache = new WeakMap<GlContext, SharedPools>();
@@ -184,9 +184,9 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
     readonly kind = 'webgl2';
     private readonly flat: GlTarget;
     private readonly bandTargets: GlTarget[] = [];
-    private readonly scratch: GlTarget[];
-    private readonly regions: GlTarget[];
-    private readonly finals: GlTarget[];
+    private readonly scratch: (GlTarget | null)[];
+    private readonly regions: (GlTarget | null)[];
+    private readonly finals: (GlTarget | null)[];
     private readonly empty: WebGLTexture;
     private tile: WebGLTexture | null = null;
     private tileWidth = 0;
@@ -623,15 +623,20 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, tile.width, tile.height, gl.RGBA, gl.FLOAT, data);
     }
 
-    private sized(pool: GlTarget[], slot: number, width: number, height: number): GlTarget | null {
+    private sized(
+        pool: (GlTarget | null)[],
+        slot: number,
+        width: number,
+        height: number,
+    ): GlTarget | null {
         const target = growTarget(this.context, pool[slot] ?? null, width, height, 'float');
-        if (target) pool[slot] = target;
+        pool[slot] = target;
         return target;
     }
 
     private byteTarget(width: number, height: number): GlTarget | null {
         const target = growTarget(this.context, this.finals[0] ?? null, width, height, 'byte');
-        if (target) this.finals[0] = target;
+        this.finals[0] = target;
         return target;
     }
 }

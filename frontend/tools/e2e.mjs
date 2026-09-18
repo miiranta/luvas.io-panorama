@@ -232,8 +232,8 @@ try {
         `${hud.canvas?.width}x${hud.canvas?.height}, ${hud.coverage.toFixed(2)}% of pixels written`,
     );
     check(
-        'HUD shows count and covered angle',
-        hud.chips.length > 1 && /°/.test(hud.chips.join(' ')),
+        'HUD shows the photo count',
+        hud.chips.length === 1 && /\d+ photos/.test(hud.chips[0]),
         hud.chips.join(' | '),
     );
     check(
@@ -270,6 +270,25 @@ try {
             `e.g. "${liveFrames[0]?.pill ?? liveTracking[0]?.pill}"`,
     );
     await screenshot('06-live.png');
+    const previewRate = await evaluate(`
+    (async () => {
+      const original = Worker.prototype.postMessage;
+      let count = 0;
+      Worker.prototype.postMessage = function (message, transfer) {
+        if (message && message.kind === 'preview') count++;
+        return original.call(this, message, transfer);
+      };
+      const started = performance.now();
+      await new Promise((r) => setTimeout(r, 3000));
+      Worker.prototype.postMessage = original;
+      return (count * 1000) / (performance.now() - started);
+    })()
+  `);
+    check(
+        'live lines refresh faster than the old 4 Hz timer',
+        previewRate > 4,
+        `${previewRate.toFixed(1)} updates/s (fake camera streams 10 fps)`,
+    );
 
     const tracks = await evaluate(`
     (() => {
@@ -710,7 +729,7 @@ try {
 const failures = results.filter((r) => !r.pass);
 console.log(
     `\n${results.length - failures.length}/${results.length} E2E checks passed` +
-        (failures.length ? `\nfalhas: ${failures.map((f) => f.name).join('; ')}` : ''),
+        (failures.length ? `\nfailures: ${failures.map((f) => f.name).join('; ')}` : ''),
 );
 console.log(`screenshots in ${OUT}`);
 process.exit(failures.length ? 1 : 0);

@@ -1,5 +1,5 @@
 import { MatchParams } from '../../../core/models/params';
-import { MatchBackend, cpuMatchBackend } from './match-backend';
+import { MatchBackend, NO_DISTANCE, cpuMatchBackend } from './match-backend';
 
 export interface RawMatch {
     queryIndex: number;
@@ -29,7 +29,7 @@ export class DescriptorMatcher {
             const trainIndex = forward.index[q];
             if (trainIndex < 0) continue;
             const second = forward.second[q];
-            const ratio = second === 0 ? 1 : forward.best[q] / second;
+            const ratio = second === 0 || second >= NO_DISTANCE ? 1 : forward.best[q] / second;
             const mutual = !reverse || reverse[trainIndex] === q;
             matches.push({
                 queryIndex: q,

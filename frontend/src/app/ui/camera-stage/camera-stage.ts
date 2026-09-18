@@ -38,11 +38,6 @@ export class CameraStage implements OnDestroy {
     readonly dropped = this.stitcher.rejectedFrames;
     readonly pipelineError = this.stitcher.error;
 
-    readonly span = computed(() => {
-        const mosaic = this.stitcher.mosaic();
-        if (!mosaic || mosaic.spanHorizontal < 1) return null;
-        return `${Math.round(mosaic.spanHorizontal)}° × ${Math.round(mosaic.spanVertical)}°`;
-    });
     readonly enoughOverlap = computed(() => {
         if (this.frames() === 0) return true;
         const preview = this.stitcher.preview();

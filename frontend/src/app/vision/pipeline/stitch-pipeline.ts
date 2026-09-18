@@ -172,7 +172,7 @@ export class StitchPipeline {
 
         if (!best) {
             const connection = closest ? this.connection(frame, closest) : null;
-            this.reject(frame, report, INTRUDER_REASON);
+            this.reject(frame, report, INTRUDER_REASON, true);
             return finish(connection);
         }
 
@@ -226,7 +226,7 @@ export class StitchPipeline {
     }
 
     async resolveFromScratch(): Promise<void> {
-        const all = this.frames.all;
+        const all = this.frames.all.filter((frame) => frame.hasComposeSource);
         for (const frame of all) frame.rejected = false;
         const links: PairLink[] = [];
         for (let i = 0; i < all.length; i++) {
@@ -234,7 +234,7 @@ export class StitchPipeline {
                 const pair = this.linker.match(all[i], all[j]);
                 if (!isFitted(pair)) continue;
                 const link = this.linker.link(all[i], all[j], pair);
-                if (link.inliers > 0) links.push(link);
+                if (link.inliers > 0) links.push(this.inheritIntensities(link));
             }
         }
         this.links.replace(links);
@@ -340,6 +340,33 @@ export class StitchPipeline {
         return chosen;
     }
 
+    private inheritIntensities(link: PairLink): PairLink {
+        if (link.intensities.length > 0) return link;
+        const previous = this.links.between(link.a, link.b);
+        if (!previous || previous.intensities.length === 0) return link;
+        if (previous.a === link.a) {
+            return {
+                ...link,
+                intensities: previous.intensities,
+                meanIntensityA: previous.meanIntensityA,
+                meanIntensityB: previous.meanIntensityB,
+            };
+        }
+        return {
+            ...link,
+            intensities: previous.intensities.map((sample) => ({
+                ax: sample.bx,
+                ay: sample.by,
+                intensityA: sample.intensityB,
+                bx: sample.ax,
+                by: sample.ay,
+                intensityB: sample.intensityA,
+            })),
+            meanIntensityA: previous.meanIntensityB,
+            meanIntensityB: previous.meanIntensityA,
+        };
+    }
+
     private bundleFreeIds(frame: Keyframe): number[] {
         const window = Math.max(0, Math.round(this.params.global.bundleWindow));
         const ids = window === 0 ? [frame.id] : this.frames.active.slice(-window).map((f) => f.id);
@@ -347,8 +374,8 @@ export class StitchPipeline {
         return ids;
     }
 
-    private reject(frame: Keyframe, report: FrameReport, reason: string): void {
-        frame.reject();
+    private reject(frame: Keyframe, report: FrameReport, reason: string, keepSource = false): void {
+        frame.reject(keepSource);
         report.accepted = false;
         report.reason = reason;
     }
@@ -381,6 +408,8 @@ export class StitchPipeline {
             trainLabel: train.label,
             width: query.work.width,
             height: query.work.height,
+            trainWidth: train.work.width,
+            trainHeight: train.work.height,
             queryImage: query.work.data.buffer.slice(0),
             trainImage: train.work.data.buffer.slice(0),
             queryKeypoints: query.keypoints.map((keypoint) => ({ ...keypoint })),

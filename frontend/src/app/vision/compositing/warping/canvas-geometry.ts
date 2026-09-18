@@ -39,41 +39,6 @@ export function createCanvasGeometry(
     };
 }
 
-export function canvasRay(
-    geometry: CanvasGeometry,
-    u: number,
-    v: number,
-    out: Float64Array,
-): boolean {
-    const { surface, width, height } = geometry;
-    let dx = 0;
-    let dy = 0;
-    let dz = 0;
-    if (surface === 'spherical') {
-        const theta = (u / width) * Math.PI * 2 - Math.PI;
-        const phi = (v / height) * Math.PI - Math.PI / 2;
-        const cosPhi = Math.cos(phi);
-        dx = cosPhi * Math.sin(theta);
-        dy = Math.sin(phi);
-        dz = cosPhi * Math.cos(theta);
-    } else if (surface === 'cylindrical') {
-        const theta = (u / width) * Math.PI * 2 - Math.PI;
-        const h = (v / height - 0.5) * 2 * geometry.cylinderHalfHeight;
-        dx = Math.sin(theta);
-        dy = h;
-        dz = Math.cos(theta);
-    } else {
-        dx = (u - width / 2) / geometry.planarScale;
-        dy = (v - height / 2) / geometry.planarScale;
-        dz = 1;
-    }
-    const m = geometry.orientation;
-    out[0] = m[0] * dx + m[1] * dy + m[2] * dz;
-    out[1] = m[3] * dx + m[4] * dy + m[5] * dz;
-    out[2] = m[6] * dx + m[7] * dy + m[8] * dz;
-    return true;
-}
-
 export function worldToCanvas(
     geometry: CanvasGeometry,
     wx: number,

@@ -14,9 +14,6 @@
             <i>· {{ dropped() }} dropped</i>
         }
     </span>
-    @if (span(); as angle) {
-        <span class="chip" title="Field of view covered by the panorama">{{ angle }}</span>
-    }
     <span class="spacer"></span>
     <button type="button" class="icon" title="Metrics and graph" (click)="openInsights.emit()">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">

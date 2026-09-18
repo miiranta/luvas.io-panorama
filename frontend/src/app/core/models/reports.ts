@@ -55,6 +55,8 @@ export interface ConnectionPayload {
     trainLabel: string;
     width: number;
     height: number;
+    trainWidth: number;
+    trainHeight: number;
     queryImage: ArrayBuffer;
     trainImage: ArrayBuffer;
     queryKeypoints: KeypointRecord[];

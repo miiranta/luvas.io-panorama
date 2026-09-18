@@ -69,6 +69,40 @@ class MinHeap {
     }
 }
 
+function seamDistance(
+    label: Int8Array,
+    overlap: Uint8Array,
+    width: number,
+    cells: number,
+): Float64Array {
+    const distance = new Float64Array(cells).fill(Number.POSITIVE_INFINITY);
+    const queue = new Int32Array(cells);
+    let head = 0;
+    let tail = 0;
+    for (let cell = 0; cell < cells; cell++) {
+        if (!overlap[cell] || label[cell] !== 0) continue;
+        distance[cell] = 0;
+        queue[tail++] = cell;
+    }
+    while (head < tail) {
+        const current = queue[head++];
+        const x = current % width;
+        const next = distance[current] + 1;
+        for (const offset of [-1, 1, -width, width]) {
+            const neighbour = current + offset;
+            if (neighbour < 0 || neighbour >= cells) continue;
+            if (offset === -1 && x === 0) continue;
+            if (offset === 1 && x === width - 1) continue;
+            if (!overlap[neighbour] || label[neighbour] !== 1 || distance[neighbour] <= next) {
+                continue;
+            }
+            distance[neighbour] = next;
+            queue[tail++] = neighbour;
+        }
+    }
+    return distance;
+}
+
 export interface SeamStats {
     overlapPixels: number;
     inconsistentPixels: number;
@@ -158,10 +192,11 @@ export class SeamFinder {
             }
         }
         const ramp = Math.max(1, params.featherWidth / 6 / step);
+        const distance = seamDistance(label, overlap, width, cells);
         this.applyCells(tile, step, width, height, (cell, current) => {
             if (!overlap[cell]) return -1;
             if (label[cell] === 0) return 0;
-            if (label[cell] === 1) return Math.max(current, Math.min(1, (cost[cell] + 1) / ramp));
+            if (label[cell] === 1) return Math.min(current, distance[cell] / ramp);
             return params.deghost && difference[cell] > params.deghostThreshold ? 0 : -1;
         });
         return stats;

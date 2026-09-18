@@ -2,10 +2,6 @@ const UNDISTORT_ITERATIONS = 8;
 
 export const MAX_DISTORTION = 0.3;
 
-export function distortFactor(nx: number, ny: number, kappa: number): number {
-    return 1 + kappa * (nx * nx + ny * ny);
-}
-
 export function undistort(dx: number, dy: number, kappa: number, out: Float64Array): void {
     if (kappa === 0) {
         out[0] = dx;

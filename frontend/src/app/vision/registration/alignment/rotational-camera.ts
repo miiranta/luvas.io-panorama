@@ -1,10 +1,4 @@
-import {
-    Mat3,
-    mat3Identity,
-    mat3Inverse,
-    mat3Multiply,
-    mat3Transpose,
-} from '../../foundation/math/matrix3';
+import { Mat3, mat3Identity, mat3Inverse, mat3Multiply } from '../../foundation/math/matrix3';
 import { nearestRotation } from '../../foundation/math/rotation';
 
 const MIN_FOCAL = 50;
@@ -43,18 +37,6 @@ export function relativeRotationFromHomography(
     const k = intrinsics(focal, cx, cy);
     const kInv = mat3Inverse(k) ?? mat3Identity();
     return nearestRotation(mat3Multiply(kInv, mat3Multiply(h, k)));
-}
-
-export function homographyFromRotations(
-    target: Mat3,
-    source: Mat3,
-    focal: number,
-    cx: number,
-    cy: number,
-): Mat3 {
-    const k = intrinsics(focal, cx, cy);
-    const kInv = mat3Inverse(k) ?? mat3Identity();
-    return mat3Multiply(k, mat3Multiply(mat3Multiply(target, mat3Transpose(source)), kInv));
 }
 
 function translation(tx: number, ty: number): Mat3 {

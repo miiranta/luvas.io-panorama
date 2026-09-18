@@ -9,9 +9,6 @@ import {
 } from '../models/reports';
 import { PipelineState, WorkerRequest, WorkerResponse } from '../models/worker-protocol';
 
-const PREVIEW_INTERVAL = 260;
-const PREVIEW_DUTY_FACTOR = 1.5;
-
 @Injectable({ providedIn: 'root' })
 export class StitcherService {
     private worker: Worker | null = null;
@@ -20,12 +17,13 @@ export class StitcherService {
         reject: (error: Error) => void;
     } | null = null;
     private captureIndex = 0;
-    private previewTimer: number | null = null;
+    private previewFrame: number | null = null;
+    private previewClock = -1;
+    private previewCanvas: OffscreenCanvasRenderingContext2D | null = null;
     private previewInFlight = false;
     private previewSource: HTMLVideoElement | null = null;
-    private previewSentAt = 0;
-    private previewReadyAt = 0;
     private epoch = 0;
+    private sessionWorkWidth: number | null = null;
 
     readonly params = signal<PipelineParams>(structuredClone(DEFAULT_PARAMS));
     readonly reports = signal<FrameReport[]>([]);
@@ -94,8 +92,6 @@ export class StitcherService {
                 this.graph.set(message.graph);
                 break;
             case 'preview': {
-                const latency = performance.now() - this.previewSentAt;
-                this.previewReadyAt = performance.now() + latency * PREVIEW_DUTY_FACTOR;
                 if (message.epoch !== this.epoch) break;
                 this.previewInFlight = false;
                 this.preview.set(message.preview);
@@ -116,7 +112,17 @@ export class StitcherService {
             }
             case 'error':
                 this.error.set(message.message);
-                this.busy.set(false);
+                if (message.request === 'preview') {
+                    this.previewInFlight = false;
+                    break;
+                }
+                if (
+                    !message.request ||
+                    message.request === 'frame' ||
+                    message.request === 'export'
+                ) {
+                    this.busy.set(false);
+                }
                 if (message.request === 'export') this.settleExport(new Error(message.message));
                 break;
         }
@@ -157,16 +163,18 @@ export class StitcherService {
 
     trackLive(source: HTMLVideoElement): void {
         this.previewSource = source;
-        if (this.previewTimer !== null) return;
-        this.previewTimer = setInterval(
-            () => this.tickPreview(),
-            PREVIEW_INTERVAL,
-        ) as unknown as number;
+        if (this.previewFrame !== null) return;
+        const loop = () => {
+            this.previewFrame = requestAnimationFrame(loop);
+            this.tickPreview();
+        };
+        this.previewFrame = requestAnimationFrame(loop);
     }
 
     stopTracking(): void {
-        if (this.previewTimer !== null) clearInterval(this.previewTimer);
-        this.previewTimer = null;
+        if (this.previewFrame !== null) cancelAnimationFrame(this.previewFrame);
+        this.previewFrame = null;
+        this.previewClock = -1;
         this.previewSource = null;
         this.previewInFlight = false;
         this.preview.set(null);
@@ -175,18 +183,13 @@ export class StitcherService {
     private tickPreview(): void {
         const source = this.previewSource;
         if (!source || this.previewInFlight || this.busy() || this.working()) return;
-        if (performance.now() < this.previewReadyAt) return;
+        if (source.currentTime === this.previewClock) return;
         if (this.reports().every((report) => !report.accepted)) return;
         if (source.readyState < 2 || !source.videoWidth) return;
-        const frame = this.rasterize(
-            source,
-            source.videoWidth,
-            source.videoHeight,
-            this.params().detect.workWidth,
-        );
+        const frame = this.rasterizePreview(source);
         if (!frame) return;
+        this.previewClock = source.currentTime;
         this.previewInFlight = true;
-        this.previewSentAt = performance.now();
         this.send(
             {
                 kind: 'preview',
@@ -220,7 +223,8 @@ export class StitcherService {
             return;
         }
         snapshotContext.drawImage(source, 0, 0);
-        const work = this.rasterize(snapshot, width, height, params.detect.workWidth);
+        this.sessionWorkWidth ??= params.detect.workWidth;
+        const work = this.rasterize(snapshot, width, height, this.workWidth());
         const compose = this.rasterize(snapshot, width, height, params.compose.composeWidth);
         if (!work || !compose) {
             this.error.set('failed to read the camera frame');
@@ -247,6 +251,26 @@ export class StitcherService {
             },
             [work.data.buffer as ArrayBuffer, compose.data.buffer as ArrayBuffer],
         );
+    }
+
+    private workWidth(): number {
+        return this.sessionWorkWidth ?? this.params().detect.workWidth;
+    }
+
+    private rasterizePreview(source: HTMLVideoElement): ImageData | null {
+        const scale = Math.min(1, this.workWidth() / source.videoWidth);
+        const width = Math.max(32, Math.round(source.videoWidth * scale));
+        const height = Math.max(32, Math.round(source.videoHeight * scale));
+        let context = this.previewCanvas;
+        if (!context || context.canvas.width !== width || context.canvas.height !== height) {
+            context = new OffscreenCanvas(width, height).getContext('2d', {
+                willReadFrequently: true,
+            });
+            this.previewCanvas = context;
+        }
+        if (!context) return null;
+        context.drawImage(source, 0, 0, width, height);
+        return context.getImageData(0, 0, width, height);
     }
 
     private rasterize(
@@ -293,6 +317,7 @@ export class StitcherService {
         this.mosaic.set(null);
         this.graph.set({ nodes: [], edges: [], order: [], reference: -1, components: 0 });
         this.captureIndex = 0;
+        this.sessionWorkWidth = null;
         this.error.set(null);
         this.status.set('pipeline reset');
         this.send({ kind: 'reset' });

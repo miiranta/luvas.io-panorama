@@ -1,13 +1,11 @@
 import { PipelineParams } from '../../core/models/params';
 import { BlurBackend } from '../compositing/blending/blur-backend';
 import { WarpBackend } from '../compositing/warping/warp-backend';
-import { CanvasBox, alignDown, alignUp } from '../compositing/warping/canvas-box';
 import {
     CanvasGeometry,
     angularSpan,
     createCanvasGeometry,
 } from '../compositing/warping/canvas-geometry';
-import { unionFootprints } from '../compositing/warping/footprint';
 import { ExposureCompensator } from '../compositing/photometric/exposure-compensator';
 import { levelHorizon } from '../registration/alignment/level-horizon';
 import { CpuMosaic } from '../compositing/blending/cpu-mosaic';
@@ -44,7 +42,6 @@ const VIGNETTING_TOLERANCE = 0.01;
 const FALLBACK_WIDTH = 640;
 const FALLBACK_HEIGHT = 480;
 const NO_STATS: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
-const EXPORT_MARGIN = 2;
 
 export interface RasterImage {
     width: number;
@@ -336,7 +333,7 @@ export class MosaicCompositor {
         const pairs = this.links.verified.flatMap((link) => {
             const a = indexOf.get(link.a);
             const b = indexOf.get(link.b);
-            if (a === undefined || b === undefined) return [];
+            if (a === undefined || b === undefined || link.intensities.length === 0) return [];
             const [meanA, meanB] = this.correctedMeans(link, active[a], active[b]);
             return [
                 {

@@ -4,6 +4,17 @@ import { Correspondence, MIN_PAIRS } from './correspondence';
 import { fitModel, isPlausibleHomography } from './fit-model';
 import { symmetricTransferError } from './transfer-error';
 
+const SAMPLE_COVERAGE = 3;
+
+function distinctSamples(count: number, size: number): number {
+    let total = 1;
+    for (let i = 0; i < size; i++) {
+        total = (total * (count - i)) / (i + 1);
+        if (total > Number.MAX_SAFE_INTEGER) return Number.MAX_SAFE_INTEGER;
+    }
+    return Math.max(1, Math.round(total));
+}
+
 export interface ModelFit {
     matrix: Mat3;
     inliers: Uint8Array;
@@ -27,7 +38,10 @@ export class RansacEstimator {
         let bestCount = 0;
         let bestError = Number.POSITIVE_INFINITY;
         let bestMatrix: Mat3 | null = null;
-        let maxIterations = params.ransacMaxIterations;
+        let maxIterations = Math.min(
+            params.ransacMaxIterations,
+            distinctSamples(points.length, sampleSize) * SAMPLE_COVERAGE,
+        );
         const indices = new Array<number>(sampleSize);
         let iteration = 0;
         while (iteration < maxIterations) {
@@ -69,10 +83,7 @@ export class RansacEstimator {
                     const denom = Math.log(1 - Math.pow(w, sampleSize));
                     if (denom < -1e-12) {
                         const needed = Math.ceil(Math.log(1 - params.ransacConfidence) / denom);
-                        maxIterations = Math.min(
-                            params.ransacMaxIterations,
-                            Math.max(needed, sampleSize * 4),
-                        );
+                        maxIterations = Math.min(maxIterations, Math.max(needed, sampleSize * 4));
                     }
                 } else if (w >= 1) {
                     maxIterations = Math.min(maxIterations, iteration);

@@ -48,7 +48,7 @@ class GpuBlurBackend implements BlurBackend {
     private source: WebGLTexture | null = null;
     private sourceWidth = 0;
     private sourceHeight = 0;
-    private targets: GlTarget[] = [];
+    private targets: (GlTarget | null)[] = [];
 
     private constructor(
         private readonly context: GlContext,
@@ -124,7 +124,7 @@ class GpuBlurBackend implements BlurBackend {
 
     private targetFor(slot: number, width: number, height: number): GlTarget | null {
         const target = growTarget(this.context, this.targets[slot] ?? null, width, height, 'float');
-        if (target) this.targets[slot] = target;
+        this.targets[slot] = target;
         return target;
     }
 }

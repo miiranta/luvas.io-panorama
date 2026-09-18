@@ -1,4 +1,4 @@
-import { CanvasGeometry, canvasRay } from './canvas-geometry';
+import { CanvasGeometry } from './canvas-geometry';
 import { ColorImage } from '../../foundation/imaging/image';
 import { mipPyramidFor, sampleTrilinear } from './mip-pyramid';
 import { Mat3, mat3Identity } from '../../foundation/math/matrix3';

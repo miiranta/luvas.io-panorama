@@ -9,7 +9,7 @@ import {
 import { GlContext, GlProgram, GlTarget } from '../../foundation/gpu/gl-context';
 
 const CALIBRATION_COUNTS = [100, 300, 900];
-const NO_DISTANCE = 4096;
+export const NO_DISTANCE = 4096;
 
 const NEAREST = `#version 300 es
 precision highp float;

@@ -66,10 +66,12 @@ export class Keyframe {
         this.composedRotation = null;
     }
 
-    reject(): void {
+    reject(keepSource = false): void {
         this.rejected = true;
         this.work = null;
+        if (keepSource) return;
         this.compose = null;
+        this.archive = null;
     }
 
     async composeImage(): Promise<ColorImage | null> {

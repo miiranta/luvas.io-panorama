@@ -8,40 +8,25 @@ export interface SuppressionOptions {
     subPixel: boolean;
 }
 
-function dilate(
+function isLocalMaximum(
     response: Float32Array,
     width: number,
     height: number,
+    x: number,
+    y: number,
     radius: number,
-): Float32Array {
-    const horizontal = new Float32Array(width * height);
-    const out = new Float32Array(width * height);
-    for (let y = 0; y < height; y++) {
-        const row = y * width;
-        for (let x = 0; x < width; x++) {
-            let best = -Infinity;
-            const from = Math.max(0, x - radius);
-            const to = Math.min(width - 1, x + radius);
-            for (let k = from; k <= to; k++) {
-                const value = response[row + k];
-                if (value > best) best = value;
-            }
-            horizontal[row + x] = best;
+): boolean {
+    const value = response[y * width + x];
+    const x0 = Math.max(0, x - radius);
+    const x1 = Math.min(width - 1, x + radius);
+    const y1 = Math.min(height - 1, y + radius);
+    for (let row = Math.max(0, y - radius); row <= y1; row++) {
+        const start = row * width;
+        for (let column = x0; column <= x1; column++) {
+            if (response[start + column] > value) return false;
         }
     }
-    for (let x = 0; x < width; x++) {
-        for (let y = 0; y < height; y++) {
-            let best = -Infinity;
-            const from = Math.max(0, y - radius);
-            const to = Math.min(height - 1, y + radius);
-            for (let k = from; k <= to; k++) {
-                const value = horizontal[k * width + x];
-                if (value > best) best = value;
-            }
-            out[y * width + x] = best;
-        }
-    }
-    return out;
+    return true;
 }
 
 export function nonMaximumSuppression(
@@ -51,13 +36,14 @@ export function nonMaximumSuppression(
     options: SuppressionOptions,
 ): Keypoint[] {
     const { threshold, radius, border, subPixel } = options;
-    const dilated = dilate(response, width, height, radius);
     const found: Keypoint[] = [];
     for (let y = border; y < height - border; y++) {
         for (let x = border; x < width - border; x++) {
             const i = y * width + x;
             const value = response[i];
-            if (value <= threshold || dilated[i] > value) continue;
+            if (value <= threshold || !isLocalMaximum(response, width, height, x, y, radius)) {
+                continue;
+            }
             const [px, py] = subPixel ? refineSubPixel(response, width, x, y) : [x, y];
             found.push({ x: px, y: py, response: value, orientation: 0, scale: 1 });
         }

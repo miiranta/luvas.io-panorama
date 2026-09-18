@@ -87,16 +87,22 @@ export function sampleTrilinear(
     const clamped = Math.min(levels.length - 1, Math.max(0, lod));
     const low = clamped | 0;
     const high = Math.min(levels.length - 1, low + 1);
-    const scale = 1 / (1 << low);
-    sampleLevel(levels[low], x * scale - 0.5 * (1 - scale), y * scale - 0.5 * (1 - scale), out);
+    sampleScaled(levels, low, x, y, out);
     const blend = clamped - low;
     if (blend <= 1e-3 || high === low) return;
-    const nextScale = 1 / (1 << high);
-    sampleLevel(
-        levels[high],
-        x * nextScale - 0.5 * (1 - nextScale),
-        y * nextScale - 0.5 * (1 - nextScale),
-        scratch,
-    );
+    sampleScaled(levels, high, x, y, scratch);
     for (let c = 0; c < 3; c++) out[c] += (scratch[c] - out[c]) * blend;
+}
+
+function sampleScaled(
+    levels: readonly MipLevel[],
+    index: number,
+    x: number,
+    y: number,
+    out: Float32Array,
+): void {
+    const level = levels[index];
+    const scaleX = level.width / levels[0].width;
+    const scaleY = level.height / levels[0].height;
+    sampleLevel(level, (x + 0.5) * scaleX - 0.5, (y + 0.5) * scaleY - 0.5, out);
 }

@@ -147,7 +147,11 @@ async function handle(request: WorkerRequest): Promise<void> {
 async function settle(): Promise<void> {
     if (pending > 0 || !pipeline.needsSettle()) return;
     postState('refining alignment', -1);
-    if (await pipeline.settle()) publishMosaic();
+    try {
+        if (await pipeline.settle()) publishMosaic();
+    } catch (error) {
+        post({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
 }
 
 function scheduleSettle(): void {
@@ -165,11 +169,11 @@ function scheduleSettle(): void {
 self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
     const request = event.data;
     const counted = tracked(request);
-    if (settleTimer !== null) {
-        clearTimeout(settleTimer);
-        settleTimer = null;
-    }
     if (counted) {
+        if (settleTimer !== null) {
+            clearTimeout(settleTimer);
+            settleTimer = null;
+        }
         pending++;
         if (invalidates(request)) stale = true;
         postState(stageFor(request), -1);

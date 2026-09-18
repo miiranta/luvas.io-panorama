@@ -13,6 +13,12 @@ import { CornerDetector } from '../src/app/vision/features/detection/corner-dete
 import { DescriptorMatcher } from '../src/app/vision/features/matching/descriptor-matcher';
 import { RansacEstimator } from '../src/app/vision/registration/estimation/ransac-estimator';
 import { mat3Identity } from '../src/app/vision/foundation/math/matrix3';
+import { levelHorizon } from '../src/app/vision/registration/alignment/level-horizon';
+import { computeFootprint } from '../src/app/vision/compositing/warping/footprint';
+import { createCanvasGeometry } from '../src/app/vision/compositing/warping/canvas-geometry';
+import { PoseGraph } from '../src/app/vision/registration/alignment/pose-graph';
+import { fastSegmentTest } from '../src/app/vision/features/detection/fast-segment-test';
+import { Keyframe } from '../src/app/vision/pipeline/keyframe';
 
 function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: Uint8Array } {
     const bytes = new Uint8Array(buffer);
@@ -133,7 +139,7 @@ async function runScenario(
         const view = renderView(other, rotation, focalTruth, viewWidth, viewHeight);
         const work = scaleImage(view, params.detect.workWidth);
         const compose = scaleImage(view, params.compose.composeWidth);
-        const { report } = await pipeline.addFrame('intrusa', work, compose);
+        const { report } = await pipeline.addFrame('intruder', work, compose);
         check(
             `${title}: intruder image rejected`,
             !report.accepted,
@@ -165,10 +171,9 @@ async function runScenario(
     const mosaic = pipeline.mosaicPayload();
     check(
         `${title}: mosaic has coverage`,
-        mosaic !== null && mosaic.spanHorizontal > 5,
+        mosaic !== null && mosaic.fillPercent > 50,
         mosaic
-            ? `${mosaic.spanHorizontal.toFixed(1)}°×${mosaic.spanVertical.toFixed(1)}°, ` +
-                  `${mosaic.width}×${mosaic.height}, ${mosaic.fillPercent.toFixed(1)}% filled`
+            ? `${mosaic.width}×${mosaic.height}, ${mosaic.fillPercent.toFixed(1)}% filled`
             : 'no mosaic',
     );
     check(
@@ -357,7 +362,127 @@ function runUnitChecks(): void {
     check(
         'rotation from the homography',
         angleBetween(recovered, rotation) < 0.2,
-        `desvio ${angleBetween(recovered, rotation).toFixed(3)}°`,
+        `deviation ${angleBetween(recovered, rotation).toFixed(3)}°`,
+    );
+
+    const pitches = [-20, -5, 10, 25];
+    const vertical = pitches.map((pitch, i) =>
+        mat3Multiply(
+            rotationFromAxisAngle(0, 0, deg(0.05 * Math.sin(i * 2.1))),
+            mat3Multiply(
+                rotationFromAxisAngle(deg(pitch), 0, 0),
+                rotationFromAxisAngle(0, deg(0.05 * Math.cos(i * 1.3)), 0),
+            ),
+        ),
+    );
+    const meanPitch = pitches.reduce((sum, pitch) => sum + pitch, 0) / pitches.length;
+    const levelled = angleBetween(
+        levelHorizon(vertical),
+        mat3Transpose(rotationFromAxisAngle(deg(meanPitch), 0, 0)),
+    );
+    check(
+        'straightening a vertical sweep',
+        levelled < 1,
+        `${levelled.toFixed(2)}° from the level view at the mean pitch`,
+    );
+
+    const sphere = createCanvasGeometry('spherical', 1024, 500);
+    const zenith = computeFootprint(sphere, rotationFromAxisAngle(deg(80), 0, 0), 640, 480, 500);
+    check(
+        'footprint of a photo containing a pole',
+        zenith.v1 === sphere.height - 1 && zenith.u0 === 0 && zenith.u1 === sphere.width - 1,
+        `v ${zenith.v0}–${zenith.v1} of ${sphere.height}, u ${zenith.u0}–${zenith.u1}`,
+    );
+
+    const edge = (a: number, b: number, inliers: number) => ({
+        a,
+        b,
+        matches: inliers * 1.5,
+        inliers,
+        meanError: 1,
+        verified: true,
+        inTree: false,
+    });
+    const graph = new PoseGraph(5, [
+        edge(0, 1, 60),
+        edge(1, 2, 60),
+        edge(0, 2, 50),
+        edge(3, 4, 300),
+    ]);
+    check(
+        'graph reference inside the main component',
+        graph.inMainComponent(graph.reference),
+        `reference ${graph.reference}, strong intruder pair 3–4`,
+    );
+
+    const side = 9;
+    const patch = new Float32Array(side * side).fill(100);
+    const ring = [
+        [1, -3],
+        [2, -2],
+        [3, -1],
+        [3, 0],
+        [3, 1],
+        [2, 2],
+        [1, 3],
+        [0, 3],
+        [-1, 3],
+    ];
+    for (const [dx, dy] of ring) patch[(4 + dy) * side + 4 + dx] = 200;
+    const segment = fastSegmentTest(
+        { width: side, height: side, data: patch },
+        { ...DEFAULT_PARAMS.detect, fastArc: 9 },
+        new Float32Array(side * side).fill(1),
+    );
+    check(
+        'FAST-9 keeps an arc that covers two compass pixels',
+        segment[4 * side + 4] > 0,
+        `response ${segment[4 * side + 4]}`,
+    );
+
+    const lonely = new DescriptorMatcher().match(
+        new Uint32Array(8).fill(0xffff),
+        1,
+        new Uint32Array(8).fill(0xffff),
+        1,
+        DEFAULT_PARAMS.match,
+    );
+    check(
+        'ratio test needs a second neighbour',
+        lonely.length === 1 && !lonely[0].accepted,
+        `single candidate accepted=${lonely[0]?.accepted}`,
+    );
+}
+
+async function runExposureCheck(params: PipelineParams): Promise<void> {
+    console.log('\n=== exposure after reordering ===');
+    const world = buildWorld(7);
+    const exposures = [1, 1.25, 0.85, 1.1, 0.9, 1.2];
+    const pipeline = new StitchPipeline();
+    pipeline.setParams(params);
+    for (let i = 0; i < exposures.length; i++) {
+        const view = renderView(world, rotationFromAxisAngle(0, deg(i * 11), 0), 780, 640, 480);
+        for (let p = 0; p < view.data.length; p += 4) {
+            for (let c = 0; c < 3; c++) view.data[p + c] = view.data[p + c] * exposures[i];
+        }
+        await pipeline.addFrame(
+            `#${i + 1}`,
+            scaleImage(view, params.detect.workWidth),
+            scaleImage(view, params.compose.composeWidth),
+        );
+    }
+    const store = (pipeline as unknown as { frames: { active: Keyframe[] } }).frames;
+    const before = store.active.map((frame) => frame.gain);
+    await pipeline.resolveFromScratch();
+    const after = store.active.map((frame) => frame.gain);
+    const drift = Math.max(...before.map((gain, i) => Math.abs((after[i] ?? 0) / gain - 1)));
+    const expected = exposures.map((exposure) => 1 / exposure);
+    const mean = expected.reduce((sum, gain) => sum + gain, 0) / expected.length;
+    const error = Math.max(...after.map((gain, i) => Math.abs(gain / (expected[i] / mean) - 1)));
+    check(
+        'exposure gains survive reordering',
+        after.length === exposures.length && drift < 0.02 && error < 0.1,
+        `gain drift ${(drift * 100).toFixed(1)}%, error vs 1/exposure ${(error * 100).toFixed(1)}%`,
     );
 }
 
@@ -368,6 +493,7 @@ fast.detect.workWidth = 480;
 
 runUnitChecks();
 runScaleChecks();
+await runExposureCheck(fast);
 await runScenario(
     'horizontal sequence',
     structuredClone(fast),
@@ -503,6 +629,6 @@ await runScalingCheck();
 const failures = results.filter((r) => !r.pass);
 console.log(
     `\n${results.length - failures.length}/${results.length} checks passed` +
-        (failures.length > 0 ? `\nfalhas: ${failures.map((f) => f.name).join('; ')}` : ''),
+        (failures.length > 0 ? `\nfailures: ${failures.map((f) => f.name).join('; ')}` : ''),
 );
 process.exit(failures.length > 0 ? 1 : 0);

@@ -85,6 +85,17 @@ export function computeFootprint(
         u0 = Math.max(0, u0);
         u1 = Math.min(geometry.width - 1, u1);
     }
+    if (geometry.surface === 'spherical') {
+        for (const pole of [-1, 1]) {
+            if (!seesPole(geometry, rotation, pole, sourceWidth, sourceHeight, focal, distortion)) {
+                continue;
+            }
+            u0 = 0;
+            u1 = geometry.width - 1;
+            if (pole < 0) v0 = 0;
+            else v1 = geometry.height - 1;
+        }
+    }
     v0 = Math.max(0, v0);
     v1 = Math.min(geometry.height - 1, v1);
     const valid = u1 > u0 && v1 > v0;
@@ -95,6 +106,29 @@ export function computeFootprint(
         v1: Math.ceil(v1),
         valid,
     };
+}
+
+function seesPole(
+    geometry: CanvasGeometry,
+    rotation: Mat3,
+    pole: number,
+    sourceWidth: number,
+    sourceHeight: number,
+    focal: number,
+    distortion: number,
+): boolean {
+    const o = geometry.orientation;
+    const wx = o[1] * pole;
+    const wy = o[4] * pole;
+    const wz = o[7] * pole;
+    const z = rotation[6] * wx + rotation[7] * wy + rotation[8] * wz;
+    if (z <= 1e-6) return false;
+    const nx = (rotation[0] * wx + rotation[1] * wy + rotation[2] * wz) / z;
+    const ny = (rotation[3] * wx + rotation[4] * wy + rotation[5] * wz) / z;
+    const lens = 1 + distortion * (nx * nx + ny * ny);
+    const px = focal * nx * lens + sourceWidth / 2;
+    const py = focal * ny * lens + sourceHeight / 2;
+    return px >= 0 && py >= 0 && px <= sourceWidth - 1 && py <= sourceHeight - 1;
 }
 
 export interface FootprintRequest {

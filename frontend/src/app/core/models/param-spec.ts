@@ -28,7 +28,7 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         group: 'detect',
         key: 'workWidth',
         label: 'Resolution',
-        hint: 'Width in px used to detect and match features',
+        hint: 'Width in px used to detect and match features; applies from the next panorama',
         kind: 'range',
         min: 320,
         max: 1280,

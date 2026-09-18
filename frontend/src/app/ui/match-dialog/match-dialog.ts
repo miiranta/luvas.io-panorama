@@ -39,14 +39,14 @@ export class MatchDialog {
 
     private draw(element: HTMLCanvasElement, payload: ConnectionPayload): void {
         const gap = 10;
-        element.width = payload.width * 2 + gap;
-        element.height = payload.height;
+        element.width = payload.trainWidth + gap + payload.width;
+        element.height = Math.max(payload.height, payload.trainHeight);
         const context = element.getContext('2d');
         if (!context) return;
         context.fillStyle = '#17102e';
         context.fillRect(0, 0, element.width, element.height);
-        const offset = payload.width + gap;
-        this.paint(context, payload.trainImage, payload.width, payload.height, 0);
+        const offset = payload.trainWidth + gap;
+        this.paint(context, payload.trainImage, payload.trainWidth, payload.trainHeight, 0);
         this.paint(context, payload.queryImage, payload.width, payload.height, offset);
         context.lineWidth = 1.2;
         for (const match of payload.matches) {

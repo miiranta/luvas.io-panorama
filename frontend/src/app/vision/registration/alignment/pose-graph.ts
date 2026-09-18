@@ -104,16 +104,24 @@ function treeOrder(nodeCount: number, tree: readonly GraphEdge[], root: number):
     return order;
 }
 
-function bestReferenceNode(nodeCount: number, edges: readonly GraphEdge[]): number {
+function bestReferenceNode(
+    nodeCount: number,
+    edges: readonly GraphEdge[],
+    component: readonly number[],
+    main: number,
+): number {
     const score = new Float64Array(nodeCount);
     for (const edge of edges) {
         if (!edge.verified) continue;
         score[edge.a] += edge.inliers;
         score[edge.b] += edge.inliers;
     }
-    let best = 0;
-    for (let i = 1; i < nodeCount; i++) if (score[i] > score[best]) best = i;
-    return best;
+    let best = -1;
+    for (let i = 0; i < nodeCount; i++) {
+        if (component[i] !== main) continue;
+        if (best < 0 || score[i] > score[best]) best = i;
+    }
+    return Math.max(0, best);
 }
 
 export class PoseGraph {
@@ -130,7 +138,7 @@ export class PoseGraph {
         this.tree = maximumSpanningTree(nodeCount, edges);
         this.components = connectedComponents(nodeCount, edges);
         this.mainComponent = largestComponent(this.components);
-        this.reference = bestReferenceNode(nodeCount, edges);
+        this.reference = bestReferenceNode(nodeCount, edges, this.components, this.mainComponent);
         this.traversal = nodeCount > 0 ? treeOrder(nodeCount, this.tree, this.reference) : [];
     }
 
