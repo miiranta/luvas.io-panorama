@@ -8,6 +8,7 @@ import { PairLink } from './pair-link';
 
 const DEFAULT_FOCAL_FACTOR = 1.1;
 const FOCAL_MEMORY = 0.7;
+const MIN_DISTORTION_CAMERAS = 3;
 
 export interface BundleSummary {
     before: number;
@@ -18,6 +19,7 @@ const NO_BUNDLE: BundleSummary = { before: 0, after: 0 };
 
 export class CameraSolver {
     private focalEstimate: number | null = null;
+    private distortionEstimate = 0;
     private readonly adjuster = new BundleAdjuster();
 
     constructor(private readonly params: () => GlobalParams) {}
@@ -26,8 +28,13 @@ export class CameraSolver {
         return this.focalEstimate;
     }
 
+    get distortion(): number {
+        return this.params().refineDistortion ? this.distortionEstimate : 0;
+    }
+
     reset(): void {
         this.focalEstimate = null;
+        this.distortionEstimate = 0;
     }
 
     focalFor(frame: { workWidth: number; workHeight: number }): number {
@@ -89,17 +96,20 @@ export class CameraSolver {
         const result = this.adjuster.solve({
             rotations: active.map((frame) => Float64Array.from(frame.rotation) as Mat3),
             focal: this.focalFor(reference),
+            distortion: this.distortion,
             cx: reference.centreX,
             cy: reference.centreY,
             observations,
             freeCameras,
             refineFocal: params.refineFocal,
+            refineDistortion: params.refineDistortion && active.length >= MIN_DISTORTION_CAMERAS,
             iterations: params.bundleIterations,
         });
         active.forEach((frame, index) => {
             frame.rotation = result.rotations[index];
         });
         this.focalEstimate = result.focal;
+        if (params.refineDistortion) this.distortionEstimate = result.distortion;
         return {
             before: result.initialError,
             after: result.finalError,

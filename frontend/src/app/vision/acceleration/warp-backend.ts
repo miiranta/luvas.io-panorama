@@ -14,6 +14,8 @@ export interface WarpRequest {
     rotation: Mat3;
     source: ColorImage;
     focal: number;
+    distortion: number;
+    vignetting: number;
     gain: number;
     feather: number;
     u0: number;
@@ -43,6 +45,8 @@ uniform vec2 uSourceSize;
 uniform float uPlanarScale;
 uniform float uCylinderHalf;
 uniform float uFocal;
+uniform float uDistortion;
+uniform float uVignetting;
 uniform float uGain;
 uniform float uFeather;
 uniform int uSurface;
@@ -78,18 +82,24 @@ void main() {
     vec3 ray = uOrientation * surfaceRay(cu, cv);
     vec3 cam = uRotation * ray;
     if (cam.z <= 1e-6) return;
-    float px = uFocal * cam.x / cam.z + uSourceSize.x * 0.5;
-    float py = uFocal * cam.y / cam.z + uSourceSize.y * 0.5;
+    vec2 normalised = cam.xy / cam.z;
+    float lens = 1.0 + uDistortion * dot(normalised, normalised);
+    float px = uFocal * normalised.x * lens + uSourceSize.x * 0.5;
+    float py = uFocal * normalised.y * lens + uSourceSize.y * 0.5;
     if (px < 0.0 || py < 0.0 || px > uSourceSize.x - 1.0 || py > uSourceSize.y - 1.0) return;
     vec3 colour = texture(uSource, vec2((px + 0.5) / uSourceSize.x, (py + 0.5) / uSourceSize.y)).rgb;
     float edge = min(min(px, uSourceSize.x - 1.0 - px), min(py, uSourceSize.y - 1.0 - py));
-    fragColor = vec4(min(vec3(1.0), colour * uGain), min(1.0, (edge + 0.5) / uFeather));
+    vec2 offset = (vec2(px, py) - uSourceSize * 0.5) / uFocal;
+    float falloff = max(0.05, 1.0 + uVignetting * dot(offset, offset));
+    fragColor = vec4(min(vec3(1.0), colour * uGain / falloff), min(1.0, (edge + 0.5) / uFeather));
 }`;
 
 export const cpuWarpBackend: WarpBackend = {
     kind: 'cpu',
     warp(request: WarpRequest): WarpResult {
-        const { geometry, rotation, source, focal, gain, feather, u0, v0, width, height } = request;
+        const { geometry, rotation, source, focal, distortion, vignetting, gain, feather } =
+            request;
+        const { u0, v0, width, height } = request;
         const wraps = geometry.surface !== 'planar';
         const canvasWidth = geometry.width;
         const canvasHeight = geometry.height;
@@ -159,10 +169,11 @@ export const cpuWarpBackend: WarpBackend = {
                 }
                 const camZ = m[6] * dx + m[7] * dy + m[8] * dz;
                 if (camZ <= 1e-6) continue;
-                const camX = m[0] * dx + m[1] * dy + m[2] * dz;
-                const camY = m[3] * dx + m[4] * dy + m[5] * dz;
-                const px = (focal * camX) / camZ + cx;
-                const py = (focal * camY) / camZ + cy;
+                const nx = (m[0] * dx + m[1] * dy + m[2] * dz) / camZ;
+                const ny = (m[3] * dx + m[4] * dy + m[5] * dz) / camZ;
+                const lens = 1 + distortion * (nx * nx + ny * ny);
+                const px = focal * nx * lens + cx;
+                const py = focal * ny * lens + cy;
                 if (px < 0 || py < 0 || px > source.width - 1 || py > source.height - 1) continue;
                 projected[t] = px;
                 projected[t + 1] = py;
@@ -191,9 +202,12 @@ export const cpuWarpBackend: WarpBackend = {
                     sample,
                     scratch,
                 );
-                color[index * 3] = Math.min(255, sample[0] * gain);
-                color[index * 3 + 1] = Math.min(255, sample[1] * gain);
-                color[index * 3 + 2] = Math.min(255, sample[2] * gain);
+                const ox = (px - cx) / focal;
+                const oy = (py - cy) / focal;
+                const scale = gain / Math.max(0.05, 1 + vignetting * (ox * ox + oy * oy));
+                color[index * 3] = Math.min(255, sample[0] * scale);
+                color[index * 3 + 1] = Math.min(255, sample[1] * scale);
+                color[index * 3 + 2] = Math.min(255, sample[2] * scale);
                 const edge = Math.min(Math.min(px, edgeX - px), Math.min(py, edgeY - py));
                 mask[index] = Math.min(1, (edge + 0.5) / feather);
             }
@@ -262,6 +276,8 @@ class GpuWarpBackend implements WarpBackend {
             'uPlanarScale',
             'uCylinderHalf',
             'uFocal',
+            'uDistortion',
+            'uVignetting',
             'uGain',
             'uFeather',
             'uSurface',
@@ -287,6 +303,8 @@ class GpuWarpBackend implements WarpBackend {
             gl.uniform1f(uniforms['uPlanarScale'], geometry.planarScale);
             gl.uniform1f(uniforms['uCylinderHalf'], geometry.cylinderHalfHeight);
             gl.uniform1f(uniforms['uFocal'], request.focal);
+            gl.uniform1f(uniforms['uDistortion'], request.distortion);
+            gl.uniform1f(uniforms['uVignetting'], request.vignetting);
             gl.uniform1f(uniforms['uGain'], request.gain);
             gl.uniform1f(uniforms['uFeather'], Math.max(1, request.feather));
             gl.uniform1i(uniforms['uSurface'], SURFACE_CODE[geometry.surface] ?? 0);
@@ -415,6 +433,8 @@ function calibrationRequest(side: number): WarpRequest {
         rotation: mat3Identity(),
         source,
         focal: canvas / 2.4,
+        distortion: -0.08,
+        vignetting: -0.2,
         gain: 1,
         feather: 16,
         u0: Math.round((canvas - side) / 2),

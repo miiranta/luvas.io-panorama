@@ -121,6 +121,8 @@ export interface MosaicPayload {
     spanHorizontal: number;
     spanVertical: number;
     focal: number;
+    distortion: number;
+    vignetting: number;
     frames: number;
     surface: string;
 }

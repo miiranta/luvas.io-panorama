@@ -13,6 +13,7 @@ import {
 import { ExposureCompensator } from '../compositing/exposure';
 import { levelHorizon } from '../compositing/horizon';
 import { Mosaic } from '../compositing/mosaic';
+import { VignettingSample, estimateVignetting, vignetteAt } from '../compositing/vignetting';
 import { ColorImage } from '../imaging/image';
 import { SeamFinder, SeamStats } from '../compositing/seam-finder';
 import { Warper } from '../compositing/warper';
@@ -22,6 +23,7 @@ import { CameraSolver } from './camera-solver';
 import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
+import { PairLink } from './pair-link';
 
 const STABLE_DEGREES = 0.2;
 const PREVIEW_TWIST_DEGREES = 0.15;
@@ -29,6 +31,8 @@ const FOCAL_TOLERANCE = 5e-3;
 const GAIN_TOLERANCE = 0.02;
 const PLACEMENT_DEGREES = 0.08;
 const PREVIEW_LIVE_FRAMES = 3;
+const DISTORTION_TOLERANCE = 2e-3;
+const VIGNETTING_TOLERANCE = 0.01;
 const FALLBACK_WIDTH = 640;
 const FALLBACK_HEIGHT = 480;
 const NO_STATS: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
@@ -47,6 +51,9 @@ export class MosaicCompositor {
     private preview: Mosaic | null = null;
     private canvas: CanvasGeometry | null = null;
     private committedGeometry: CanvasGeometry | null = null;
+    private committedDistortion = 0;
+    private committedVignetting = 0;
+    private vignettingEstimate = 0;
     private readonly committedGains = new Map<number, number>();
     private readonly committedPlacements = new Map<number, { rotation: Mat3; focal: number }>();
     private readonly stats = new Map<number, SeamStats>();
@@ -70,6 +77,10 @@ export class MosaicCompositor {
         return this.canvas;
     }
 
+    get vignetting(): number {
+        return this.params().compose.vignetting ? this.vignettingEstimate : 0;
+    }
+
     statsFor(id: number): SeamStats | undefined {
         return this.stats.get(id);
     }
@@ -79,6 +90,7 @@ export class MosaicCompositor {
         this.preview = null;
         this.canvas = null;
         this.committedGeometry = null;
+        this.vignettingEstimate = 0;
         this.committedGains.clear();
         this.committedPlacements.clear();
         this.stats.clear();
@@ -147,21 +159,17 @@ export class MosaicCompositor {
     render(crop: boolean, margin = 0): RasterImage | null {
         if (!this.committed) return null;
         const useBands = this.params().compose.blend === 'multiband';
-        const image = this.committed.render(useBands, this.preview);
-        const whole = { width: image.width, height: image.height, pixels: image.data.buffer };
         const box = crop ? this.committed.boundingBox(this.preview) : null;
-        if (!box) return whole;
-        const u0 = Math.max(0, box.u0 - margin);
-        const v0 = Math.max(0, box.v0 - margin);
-        const width = Math.min(image.width - 1, box.u1 + margin) - u0 + 1;
-        const height = Math.min(image.height - 1, box.v1 + margin) - v0 + 1;
-        if (width <= 0 || height <= 0) return whole;
-        const out = new Uint8ClampedArray(width * height * 4);
-        for (let y = 0; y < height; y++) {
-            const start = ((v0 + y) * image.width + u0) * 4;
-            out.set(image.data.subarray(start, start + width * 4), y * width * 4);
-        }
-        return { width, height, pixels: out.buffer };
+        const region = box
+            ? {
+                  u0: Math.max(0, box.u0 - margin),
+                  v0: Math.max(0, box.v0 - margin),
+                  u1: Math.min(this.committed.width - 1, box.u1 + margin),
+                  v1: Math.min(this.committed.height - 1, box.v1 + margin),
+              }
+            : null;
+        const image = this.committed.render(useBands, this.preview, region);
+        return { width: image.width, height: image.height, pixels: image.data.buffer };
     }
 
     async renderExport(scale: number, megapixelBudget: number): Promise<RasterImage | null> {
@@ -246,6 +254,7 @@ export class MosaicCompositor {
                     width: source.width,
                     height: source.height,
                     focal: this.cameras.focalFor(frame) * (source.width / frame.workWidth),
+                    distortion: this.cameras.distortion,
                 },
             ];
         });
@@ -291,6 +300,11 @@ export class MosaicCompositor {
         if (!this.committed || !geometry || !previous) return false;
         if (this.reshaped(geometry)) return true;
         if (Math.abs(geometry.focal / previous.focal - 1) > FOCAL_TOLERANCE) return true;
+        if (Math.abs(this.cameras.distortion - this.committedDistortion) > DISTORTION_TOLERANCE) {
+            return true;
+        }
+        if (Math.abs(this.vignetting - this.committedVignetting) > VIGNETTING_TOLERANCE)
+            return true;
         const twist =
             (rotationAngleBetween(geometry.orientation, previous.orientation) * 180) / Math.PI;
         if (twist > PREVIEW_TWIST_DEGREES) return true;
@@ -310,6 +324,8 @@ export class MosaicCompositor {
 
     private rememberCommitted(geometry: CanvasGeometry): void {
         this.committedGeometry = geometry;
+        this.committedDistortion = this.cameras.distortion;
+        this.committedVignetting = this.vignetting;
         this.committedGains.clear();
         this.committedPlacements.clear();
         for (const frame of this.frames.active) {
@@ -322,22 +338,73 @@ export class MosaicCompositor {
         }
     }
 
+    private radiusSquared(frame: Keyframe, x: number, y: number): number {
+        const focal = this.cameras.focalFor(frame);
+        const dx = (x - frame.centreX) / focal;
+        const dy = (y - frame.centreY) / focal;
+        return dx * dx + dy * dy;
+    }
+
+    private estimateVignetting(active: Keyframe[], indexOf: Map<number, number>): void {
+        if (!this.params().compose.vignetting) {
+            this.vignettingEstimate = 0;
+            return;
+        }
+        const samples: VignettingSample[] = [];
+        for (const link of this.links.verified) {
+            const a = indexOf.get(link.a);
+            const b = indexOf.get(link.b);
+            if (a === undefined || b === undefined) continue;
+            for (const sample of link.intensities) {
+                samples.push({
+                    a,
+                    b,
+                    radiusSquaredA: this.radiusSquared(active[a], sample.ax, sample.ay),
+                    radiusSquaredB: this.radiusSquared(active[b], sample.bx, sample.by),
+                    intensityA: sample.intensityA,
+                    intensityB: sample.intensityB,
+                });
+            }
+        }
+        this.vignettingEstimate = estimateVignetting(samples, active.length);
+    }
+
+    private correctedMeans(link: PairLink, frameA: Keyframe, frameB: Keyframe): [number, number] {
+        const beta = this.vignetting;
+        if (beta === 0 || link.intensities.length === 0) {
+            return [link.meanIntensityA, link.meanIntensityB];
+        }
+        let sumA = 0;
+        let sumB = 0;
+        for (const sample of link.intensities) {
+            sumA +=
+                sample.intensityA /
+                vignetteAt(this.radiusSquared(frameA, sample.ax, sample.ay), beta);
+            sumB +=
+                sample.intensityB /
+                vignetteAt(this.radiusSquared(frameB, sample.bx, sample.by), beta);
+        }
+        return [sumA / link.intensities.length, sumB / link.intensities.length];
+    }
+
     private balanceExposure(active: Keyframe[]): void {
+        const indexOf = new Map(active.map((frame, index) => [frame.id, index]));
+        this.estimateVignetting(active, indexOf);
         if (!this.params().compose.exposureCompensation || active.length === 0) {
             for (const frame of this.frames.all) frame.gain = 1;
             return;
         }
-        const indexOf = new Map(active.map((frame, index) => [frame.id, index]));
         const pairs = this.links.verified.flatMap((link) => {
             const a = indexOf.get(link.a);
             const b = indexOf.get(link.b);
             if (a === undefined || b === undefined) return [];
+            const [meanA, meanB] = this.correctedMeans(link, active[a], active[b]);
             return [
                 {
                     a,
                     b,
-                    meanA: Math.max(1, link.meanIntensityA),
-                    meanB: Math.max(1, link.meanIntensityB),
+                    meanA: Math.max(1, meanA),
+                    meanB: Math.max(1, meanB),
                     weight: Math.max(1, link.overlapPixels),
                 },
             ];
@@ -418,6 +485,8 @@ export class MosaicCompositor {
             source,
             focal,
             frame.gain,
+            this.cameras.distortion,
+            this.vignetting,
         );
         if (!tile) return NO_STATS;
         const stats = new SeamFinder(params).cut(mosaic, tile, reference);

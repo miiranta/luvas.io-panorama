@@ -1,4 +1,5 @@
 import { SurfaceKind } from '../../core/models/params';
+import { undistort } from '../geometry/lens';
 import { Mat3, mat3Identity, mat3Transpose } from '../math/matrix3';
 
 export interface CanvasBox {
@@ -140,17 +141,20 @@ export function computeFootprint(
     sourceWidth: number,
     sourceHeight: number,
     focal: number,
+    distortion = 0,
 ): Footprint {
     const rt = mat3Transpose(rotation);
     const cx = sourceWidth / 2;
     const cy = sourceHeight / 2;
     const out = new Float64Array(2);
+    const lens = new Float64Array(2);
     const samples = 24;
     const us: number[] = [];
     const vs: number[] = [];
     const push = (px: number, py: number) => {
-        const ax = (px - cx) / focal;
-        const ay = (py - cy) / focal;
+        undistort((px - cx) / focal, (py - cy) / focal, distortion, lens);
+        const ax = lens[0];
+        const ay = lens[1];
         const wx = rt[0] * ax + rt[1] * ay + rt[2];
         const wy = rt[3] * ax + rt[4] * ay + rt[5];
         const wz = rt[6] * ax + rt[7] * ay + rt[8];
@@ -222,6 +226,7 @@ export interface FootprintRequest {
     width: number;
     height: number;
     focal: number;
+    distortion: number;
 }
 
 export function unionFootprints(
@@ -230,7 +235,14 @@ export function unionFootprints(
 ): CanvasBox | null {
     const boxes = frames
         .map((frame) =>
-            computeFootprint(geometry, frame.rotation, frame.width, frame.height, frame.focal),
+            computeFootprint(
+                geometry,
+                frame.rotation,
+                frame.width,
+                frame.height,
+                frame.focal,
+                frame.distortion,
+            ),
         )
         .filter((footprint) => footprint.valid);
     if (boxes.length === 0) return null;

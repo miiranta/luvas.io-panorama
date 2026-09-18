@@ -84,12 +84,12 @@ export function expandLevel(level: PyramidLevel, width: number, height: number):
     const scaleX = level.width / width;
     const scaleY = level.height / height;
     for (let y = 0; y < height; y++) {
-        const fy = Math.min(level.height - 1, Math.max(0, (y + 0.5) * scaleY - 0.5));
+        const fy = Math.min(level.height - 1, y * scaleY);
         const y0 = Math.floor(fy);
         const y1 = Math.min(level.height - 1, y0 + 1);
         const ay = fy - y0;
         for (let x = 0; x < width; x++) {
-            const fx = Math.min(level.width - 1, Math.max(0, (x + 0.5) * scaleX - 0.5));
+            const fx = Math.min(level.width - 1, x * scaleX);
             const x0 = Math.floor(fx);
             const x1 = Math.min(level.width - 1, x0 + 1);
             const ax = fx - x0;
@@ -112,47 +112,6 @@ export function expandLevel(level: PyramidLevel, width: number, height: number):
         }
     }
     return { data: upsampled, width, height };
-}
-
-export function expandRgb(
-    source: Float32Array,
-    width: number,
-    height: number,
-    targetWidth: number,
-    targetHeight: number,
-): Float32Array {
-    const out = new Float32Array(targetWidth * targetHeight * 3);
-    const scaleX = width / targetWidth;
-    const scaleY = height / targetHeight;
-    for (let y = 0; y < targetHeight; y++) {
-        const fy = Math.min(height - 1, Math.max(0, (y + 0.5) * scaleY - 0.5));
-        const y0 = Math.floor(fy);
-        const y1 = Math.min(height - 1, y0 + 1);
-        const ay = fy - y0;
-        for (let x = 0; x < targetWidth; x++) {
-            const fx = Math.min(width - 1, Math.max(0, (x + 0.5) * scaleX - 0.5));
-            const x0 = Math.floor(fx);
-            const x1 = Math.min(width - 1, x0 + 1);
-            const ax = fx - x0;
-            const i00 = (y0 * width + x0) * 3;
-            const i10 = (y0 * width + x1) * 3;
-            const i01 = (y1 * width + x0) * 3;
-            const i11 = (y1 * width + x1) * 3;
-            const w00 = (1 - ax) * (1 - ay);
-            const w10 = ax * (1 - ay);
-            const w01 = (1 - ax) * ay;
-            const w11 = ax * ay;
-            const target = (y * targetWidth + x) * 3;
-            for (let c = 0; c < 3; c++) {
-                out[target + c] =
-                    source[i00 + c] * w00 +
-                    source[i10 + c] * w10 +
-                    source[i01 + c] * w01 +
-                    source[i11 + c] * w11;
-            }
-        }
-    }
-    return out;
 }
 
 export function gaussianPyramid(base: PyramidLevel, levels: number): PyramidLevel[] {

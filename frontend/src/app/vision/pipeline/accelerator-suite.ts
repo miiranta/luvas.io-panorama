@@ -44,6 +44,14 @@ export class AcceleratorSuite {
         return this.warpSelector.select(this.enabled);
     }
 
+    warmup(): void {
+        if (!this.enabled) return;
+        this.blurSelector.select(true);
+        this.matchSelector.select(true);
+        this.detectSelector.select(true);
+        this.warpSelector.select(true);
+    }
+
     labels(): AcceleratorLabels {
         return {
             blurBackend: this.blurSelector.describe(this.enabled),

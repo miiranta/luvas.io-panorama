@@ -68,6 +68,10 @@ export class StitchPipeline {
         this.params = params;
     }
 
+    warmup(): void {
+        this.accelerators.warmup();
+    }
+
     setReporter(reporter: ProgressReporter): void {
         this.reporter = reporter;
     }
@@ -282,6 +286,8 @@ export class StitchPipeline {
             spanHorizontal: span.horizontal,
             spanVertical: span.vertical,
             focal: this.cameras.focal ?? 0,
+            distortion: this.cameras.distortion,
+            vignetting: this.compositor.vignetting,
             frames: this.frameCount,
             surface: this.params.compose.surface,
         };

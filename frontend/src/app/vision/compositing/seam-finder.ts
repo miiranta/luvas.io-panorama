@@ -2,55 +2,70 @@ import { ComposeParams } from '../../core/models/params';
 import { Mosaic } from './mosaic';
 import { WarpTile } from './warp-tile';
 
-interface HeapEntry {
-    cost: number;
-    index: number;
-    label: number;
-}
-
 class MinHeap {
-    private readonly items: HeapEntry[] = [];
+    private costs = new Float64Array(1024);
+    private indices = new Int32Array(1024);
+    private labels = new Int8Array(1024);
+    private length = 0;
+    cost = 0;
+    index = 0;
+    label = 0;
 
-    get size(): number {
-        return this.items.length;
-    }
-
-    push(entry: HeapEntry): void {
-        this.items.push(entry);
-        let i = this.items.length - 1;
+    push(cost: number, index: number, label: number): void {
+        if (this.length === this.costs.length) this.grow();
+        let i = this.length++;
         while (i > 0) {
             const parent = (i - 1) >> 1;
-            if (this.items[parent].cost <= this.items[i].cost) break;
-            const tmp = this.items[parent];
-            this.items[parent] = this.items[i];
-            this.items[i] = tmp;
+            if (this.costs[parent] <= cost) break;
+            this.costs[i] = this.costs[parent];
+            this.indices[i] = this.indices[parent];
+            this.labels[i] = this.labels[parent];
             i = parent;
         }
+        this.costs[i] = cost;
+        this.indices[i] = index;
+        this.labels[i] = label;
     }
 
-    pop(): HeapEntry | undefined {
-        const top = this.items[0];
-        const last = this.items.pop();
-        if (this.items.length > 0 && last) {
-            this.items[0] = last;
-            let i = 0;
-            for (;;) {
-                const left = i * 2 + 1;
-                const right = left + 1;
-                let best = i;
-                if (left < this.items.length && this.items[left].cost < this.items[best].cost)
-                    best = left;
-                if (right < this.items.length && this.items[right].cost < this.items[best].cost) {
-                    best = right;
-                }
-                if (best === i) break;
-                const tmp = this.items[best];
-                this.items[best] = this.items[i];
-                this.items[i] = tmp;
-                i = best;
-            }
+    pop(): boolean {
+        if (this.length === 0) return false;
+        this.cost = this.costs[0];
+        this.index = this.indices[0];
+        this.label = this.labels[0];
+        const last = --this.length;
+        if (last === 0) return true;
+        const cost = this.costs[last];
+        const index = this.indices[last];
+        const label = this.labels[last];
+        let i = 0;
+        for (;;) {
+            const left = i * 2 + 1;
+            if (left >= last) break;
+            const right = left + 1;
+            const child = right < last && this.costs[right] < this.costs[left] ? right : left;
+            if (this.costs[child] >= cost) break;
+            this.costs[i] = this.costs[child];
+            this.indices[i] = this.indices[child];
+            this.labels[i] = this.labels[child];
+            i = child;
         }
-        return top;
+        this.costs[i] = cost;
+        this.indices[i] = index;
+        this.labels[i] = label;
+        return true;
+    }
+
+    private grow(): void {
+        const size = this.costs.length * 2;
+        const costs = new Float64Array(size);
+        const indices = new Int32Array(size);
+        const labels = new Int8Array(size);
+        costs.set(this.costs);
+        indices.set(this.indices);
+        labels.set(this.labels);
+        this.costs = costs;
+        this.indices = indices;
+        this.labels = labels;
     }
 }
 
@@ -120,7 +135,7 @@ export class SeamFinder {
                 if (present[cell]) {
                     cost[cell] = 0;
                     label[cell] = 1;
-                    heap.push({ cost: 0, index: cell, label: 1 });
+                    heap.push(0, cell, 1);
                     continue;
                 }
                 const sx = Math.min(tile.width - 1, x * step + (step >> 1));
@@ -129,28 +144,29 @@ export class SeamFinder {
                 if (mosaic.hasCoverage(index) || reference?.hasCoverage(index)) {
                     cost[cell] = 0;
                     label[cell] = 0;
-                    heap.push({ cost: 0, index: cell, label: 0 });
+                    heap.push(0, cell, 0);
                 }
             }
         }
         const neighbours = [-1, 1, -width, width];
-        while (heap.size > 0) {
-            const entry = heap.pop();
-            if (!entry) break;
-            if (entry.cost > cost[entry.index] + 1e-9) continue;
-            const x = entry.index % width;
+        while (heap.pop()) {
+            const current = heap.index;
+            const currentCost = heap.cost;
+            const currentLabel = heap.label;
+            if (currentCost > cost[current] + 1e-9) continue;
+            const x = current % width;
             for (const offset of neighbours) {
-                const next = entry.index + offset;
+                const next = current + offset;
                 if (next < 0 || next >= cells) continue;
                 if (offset === -1 && x === 0) continue;
                 if (offset === 1 && x === width - 1) continue;
                 if (!overlap[next]) continue;
                 const stepCost = 1 + difference[next] * difference[next];
-                const candidate = entry.cost + stepCost;
+                const candidate = currentCost + stepCost;
                 if (candidate < cost[next]) {
                     cost[next] = candidate;
-                    label[next] = entry.label;
-                    heap.push({ cost: candidate, index: next, label: entry.label });
+                    label[next] = currentLabel;
+                    heap.push(candidate, next, currentLabel);
                 }
             }
         }

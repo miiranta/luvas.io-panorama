@@ -270,6 +270,15 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
     },
     {
         group: 'global',
+        key: 'refineDistortion',
+        label: 'Lens κ₁',
+        hint: 'Estimates radial lens distortion d = n(1 + κ₁|n|²) and corrects it when warping',
+        kind: 'toggle',
+        advanced: true,
+        restage: 'global',
+    },
+    {
+        group: 'global',
         key: 'candidateNeighbours',
         label: 'Neighbours',
         hint: 'How many cameras the spatial index proposes per new frame',
@@ -391,6 +400,15 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         label: 'Exposure',
         hint: 'Per-image gain estimated over the overlaps',
         kind: 'toggle',
+        restage: 'compose',
+    },
+    {
+        group: 'compose',
+        key: 'vignetting',
+        label: 'Vignetting',
+        hint: 'Estimates the radial falloff V(r) = 1 + β r² from the overlaps and removes it',
+        kind: 'toggle',
+        advanced: true,
         restage: 'compose',
     },
     {

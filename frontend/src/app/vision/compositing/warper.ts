@@ -12,7 +12,14 @@ export class Warper {
         private readonly backend: WarpBackend = cpuWarpBackend,
     ) {}
 
-    warp(rotation: Mat3, source: ColorImage, sourceFocal: number, gain: number): WarpTile | null {
+    warp(
+        rotation: Mat3,
+        source: ColorImage,
+        sourceFocal: number,
+        gain: number,
+        distortion = 0,
+        vignetting = 0,
+    ): WarpTile | null {
         const { geometry, params } = this;
         const footprint = computeFootprint(
             geometry,
@@ -20,6 +27,7 @@ export class Warper {
             source.width,
             source.height,
             sourceFocal,
+            distortion,
         );
         if (!footprint.valid) return null;
         const pad = params.blend === 'multiband' ? Math.ceil(params.featherWidth / 2) + 4 : 2;
@@ -41,6 +49,8 @@ export class Warper {
             rotation,
             source,
             focal: sourceFocal,
+            distortion,
+            vignetting,
             gain,
             feather: Math.max(1, params.featherWidth),
             u0,

@@ -1,6 +1,6 @@
 import { BlurBackend, cpuBlurBackend } from '../acceleration/blur-backend';
 import { CanvasBox } from './canvas-geometry';
-import { PyramidLevel, expandLevel, expandRgb, gaussianPyramid } from './pyramid';
+import { PyramidLevel, expandLevel, gaussianPyramid } from './pyramid';
 import { WarpTile } from './warp-tile';
 
 export interface MosaicView {
@@ -193,26 +193,35 @@ export class Mosaic {
         const stride = this.bandWidth[level];
         const baseU = tile.u0 >> level;
         const baseV = tile.v0 >> level;
-        const colour = (source: Float32Array, index: number, channel: number): number => {
-            const weight = source[index * 4 + 3];
-            return weight > 1e-6 ? source[index * 4 + channel] / weight : 0;
-        };
+        const source = current.data;
+        const coarse = next ? next.data : null;
         for (let y = 0; y < current.height; y++) {
             const row = this.levelRow(level, baseV + y);
             if (row < 0) continue;
+            const rowStart = row * stride;
             for (let x = 0; x < current.width; x++) {
-                const t = y * current.width + x;
-                const weight = current.data[t * 4 + 3];
+                const t = (y * current.width + x) * 4;
+                const weight = source[t + 3];
                 if (weight <= 1e-5) continue;
                 const column = this.levelColumn(level, baseU + x);
                 if (column < 0) continue;
-                const index = row * stride + column;
-                for (let channel = 0; channel < 3; channel++) {
-                    const value = next
-                        ? colour(current.data, t, channel) - colour(next.data, t, channel)
-                        : colour(current.data, t, channel);
-                    accColor[index * 3 + channel] += value * weight;
+                const inverse = 1 / weight;
+                let r = source[t] * inverse;
+                let g = source[t + 1] * inverse;
+                let b = source[t + 2] * inverse;
+                if (coarse) {
+                    const coarseWeight = coarse[t + 3];
+                    if (coarseWeight > 1e-6) {
+                        const coarseInverse = 1 / coarseWeight;
+                        r -= coarse[t] * coarseInverse;
+                        g -= coarse[t + 1] * coarseInverse;
+                        b -= coarse[t + 2] * coarseInverse;
+                    }
                 }
+                const index = rowStart + column;
+                accColor[index * 3] += r * weight;
+                accColor[index * 3 + 1] += g * weight;
+                accColor[index * 3 + 2] += b * weight;
                 accWeight[index] += weight;
             }
         }
@@ -237,39 +246,98 @@ export class Mosaic {
         this.addFlat(tile);
     }
 
-    private collapseBands(overlay: Mosaic | null): Float32Array {
-        let current: Float32Array | null = null;
-        let currentWidth = 0;
-        let currentHeight = 0;
+    private collapseRegion(overlay: Mosaic | null, box: CanvasBox): PyramidLevel {
+        let previous: {
+            data: Float32Array;
+            u0: number;
+            v0: number;
+            width: number;
+            height: number;
+        } | null = null;
         for (let level = this.bands - 1; level >= 0; level--) {
-            const width = this.bandWidth[level];
-            const height = this.bandHeight[level];
+            const stride = this.bandWidth[level];
+            const u0 = Math.max(0, (box.u0 >> level) - 1);
+            const v0 = Math.max(0, (box.v0 >> level) - 1);
+            const u1 = Math.min(stride - 1, (box.u1 >> level) + 1);
+            const v1 = Math.min(this.bandHeight[level] - 1, (box.v1 >> level) + 1);
+            const width = u1 - u0 + 1;
+            const height = v1 - v0 + 1;
+            const merged = new Float32Array(width * height * 3);
+            if (previous) {
+                const coarse = previous;
+                for (let y = 0; y < height; y++) {
+                    const fy = Math.min(coarse.height - 1, Math.max(0, (v0 + y) * 0.5 - coarse.v0));
+                    const y0 = Math.floor(fy);
+                    const y1 = Math.min(coarse.height - 1, y0 + 1);
+                    const ay = fy - y0;
+                    for (let x = 0; x < width; x++) {
+                        const fx = Math.min(
+                            coarse.width - 1,
+                            Math.max(0, (u0 + x) * 0.5 - coarse.u0),
+                        );
+                        const x0 = Math.floor(fx);
+                        const x1 = Math.min(coarse.width - 1, x0 + 1);
+                        const ax = fx - x0;
+                        const i00 = (y0 * coarse.width + x0) * 3;
+                        const i10 = (y0 * coarse.width + x1) * 3;
+                        const i01 = (y1 * coarse.width + x0) * 3;
+                        const i11 = (y1 * coarse.width + x1) * 3;
+                        const w00 = (1 - ax) * (1 - ay);
+                        const w10 = ax * (1 - ay);
+                        const w01 = (1 - ax) * ay;
+                        const w11 = ax * ay;
+                        const target = (y * width + x) * 3;
+                        for (let c = 0; c < 3; c++) {
+                            merged[target + c] =
+                                coarse.data[i00 + c] * w00 +
+                                coarse.data[i10 + c] * w10 +
+                                coarse.data[i01 + c] * w01 +
+                                coarse.data[i11 + c] * w11;
+                        }
+                    }
+                }
+            }
             const colour = this.bandColor[level];
             const weight = this.bandWeight[level];
             const extraColour = overlay?.bandColor[level] ?? null;
             const extraWeight = overlay?.bandWeight[level] ?? null;
-            const merged: Float32Array = current
-                ? expandRgb(current, currentWidth, currentHeight, width, height)
-                : new Float32Array(width * height * 3);
-            for (let i = 0; i < width * height; i++) {
-                const total = weight[i] + (extraWeight ? extraWeight[i] : 0);
-                if (total <= 1e-5) continue;
-                for (let channel = 0; channel < 3; channel++) {
-                    const sum =
-                        colour[i * 3 + channel] + (extraColour ? extraColour[i * 3 + channel] : 0);
-                    merged[i * 3 + channel] += sum / total;
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const index = (v0 + y) * stride + u0 + x;
+                    const total = weight[index] + (extraWeight ? extraWeight[index] : 0);
+                    if (total <= 1e-5) continue;
+                    const inverse = 1 / total;
+                    const target = (y * width + x) * 3;
+                    for (let c = 0; c < 3; c++) {
+                        const sum =
+                            colour[index * 3 + c] + (extraColour ? extraColour[index * 3 + c] : 0);
+                        merged[target + c] += sum * inverse;
+                    }
                 }
             }
-            current = merged;
-            currentWidth = width;
-            currentHeight = height;
+            previous = { data: merged, u0, v0, width, height };
         }
-        return current ?? new Float32Array(this.width * this.height * 3);
+        const finest = previous as { data: Float32Array; u0: number; v0: number; width: number };
+        const width = box.u1 - box.u0 + 1;
+        const height = box.v1 - box.v0 + 1;
+        const data = new Float32Array(width * height * 3);
+        for (let y = 0; y < height; y++) {
+            const from = ((box.v0 + y - finest.v0) * finest.width + (box.u0 - finest.u0)) * 3;
+            data.set(finest.data.subarray(from, from + width * 3), y * width * 3);
+        }
+        return { data, width, height };
     }
 
-    render(useBands: boolean, overlay?: Mosaic | null): ImageData {
-        const n = this.width * this.height;
-        const out = new Uint8ClampedArray(n * 4);
+    render(useBands: boolean, overlay?: Mosaic | null, region?: CanvasBox | null): ImageData {
+        const box: CanvasBox = region ?? {
+            u0: 0,
+            v0: 0,
+            u1: this.width - 1,
+            v1: this.height - 1,
+        };
+        const width = box.u1 - box.u0 + 1;
+        const height = box.v1 - box.v0 + 1;
+        const out = new Uint8ClampedArray(width * height * 4);
         const sameShape =
             overlay !== null &&
             overlay !== undefined &&
@@ -277,30 +345,31 @@ export class Mosaic {
             overlay.height === this.height &&
             overlay.bands === this.bands;
         const extra = sameShape ? (overlay as Mosaic) : null;
-        const collapsed = useBands ? this.collapseBands(extra) : null;
-        for (let i = 0; i < n; i++) {
-            const covered = this.coverage[i] === 1 || (extra !== null && extra.coverage[i] === 1);
-            if (!covered) continue;
-            let r = 0;
-            let g = 0;
-            let b = 0;
-            if (collapsed) {
-                r = collapsed[i * 3];
-                g = collapsed[i * 3 + 1];
-                b = collapsed[i * 3 + 2];
-            } else {
-                const w = this.flatWeight[i] + (extra ? extra.flatWeight[i] : 0);
-                if (w <= 1e-6) continue;
-                r = (this.flatColor[i * 3] + (extra ? extra.flatColor[i * 3] : 0)) / w;
-                g = (this.flatColor[i * 3 + 1] + (extra ? extra.flatColor[i * 3 + 1] : 0)) / w;
-                b = (this.flatColor[i * 3 + 2] + (extra ? extra.flatColor[i * 3 + 2] : 0)) / w;
+        const collapsed = useBands ? this.collapseRegion(extra, box).data : null;
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const i = (box.v0 + y) * this.width + box.u0 + x;
+                const o = y * width + x;
+                const covered =
+                    this.coverage[i] === 1 || (extra !== null && extra.coverage[i] === 1);
+                if (!covered) continue;
+                if (collapsed) {
+                    out[o * 4] = collapsed[o * 3];
+                    out[o * 4 + 1] = collapsed[o * 3 + 1];
+                    out[o * 4 + 2] = collapsed[o * 3 + 2];
+                } else {
+                    const w = this.flatWeight[i] + (extra ? extra.flatWeight[i] : 0);
+                    if (w <= 1e-6) continue;
+                    out[o * 4] = (this.flatColor[i * 3] + (extra ? extra.flatColor[i * 3] : 0)) / w;
+                    out[o * 4 + 1] =
+                        (this.flatColor[i * 3 + 1] + (extra ? extra.flatColor[i * 3 + 1] : 0)) / w;
+                    out[o * 4 + 2] =
+                        (this.flatColor[i * 3 + 2] + (extra ? extra.flatColor[i * 3 + 2] : 0)) / w;
+                }
+                out[o * 4 + 3] = 255;
             }
-            out[i * 4] = r;
-            out[i * 4 + 1] = g;
-            out[i * 4 + 2] = b;
-            out[i * 4 + 3] = 255;
         }
-        return new ImageData(out, this.width, this.height);
+        return new ImageData(out, width, height);
     }
 
     boundingBox(overlay?: Mosaic | null): CanvasBox | null {

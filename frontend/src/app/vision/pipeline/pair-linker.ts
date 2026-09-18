@@ -9,12 +9,13 @@ import { Correspondence } from '../geometry/transform-model';
 import { ColorImage } from '../imaging/image';
 import { Mat3 } from '../math/matrix3';
 import { Keyframe } from './keyframe';
-import { PairLink } from './pair-link';
+import { IntensitySample, PairLink } from './pair-link';
 
 const MAX_OBSERVATIONS_PER_PAIR = 120;
 const INTENSITY_PATCH_RADIUS = 3;
 const MIN_CORRESPONDENCES = 4;
 const OVERLAP_SAMPLES = 24;
+const MAX_INTENSITY_SAMPLES = 400;
 
 export interface PairMatch {
     fit: ModelFit | null;
@@ -77,7 +78,8 @@ export class PairLinker {
     link(query: Keyframe, train: Keyframe, pair: FittedPair): PairLink {
         const { fit, correspondences } = pair;
         const accepted = pair.matches.filter((match) => match.accepted).length;
-        const [meanIntensityA, meanIntensityB] = overlapIntensities(query, train, pair);
+        const intensities = intensitySamples(query, train, pair);
+        const [meanIntensityA, meanIntensityB] = meanIntensities(intensities);
         return {
             a: query.id,
             b: train.id,
@@ -91,6 +93,7 @@ export class PairLinker {
             meanIntensityA,
             meanIntensityB,
             overlapPixels: overlapArea(query, train, fit.matrix),
+            intensities,
         };
     }
 
@@ -143,21 +146,32 @@ function overlapArea(query: Keyframe, train: Keyframe, matrix: Mat3): number {
     return (inside / total) * query.workWidth * query.workHeight;
 }
 
-function overlapIntensities(query: Keyframe, train: Keyframe, pair: FittedPair): [number, number] {
-    if (!query.work || !train.work) return [1, 1];
-    let sumA = 0;
-    let sumB = 0;
-    let count = 0;
+function intensitySamples(query: Keyframe, train: Keyframe, pair: FittedPair): IntensitySample[] {
+    const samples: IntensitySample[] = [];
+    if (!query.work || !train.work) return samples;
+    const stride = Math.max(1, Math.floor(pair.fit.inlierCount / MAX_INTENSITY_SAMPLES));
+    let seen = 0;
     pair.correspondences.forEach((c, index) => {
         if (!pair.fit.inliers[index] || !query.work || !train.work) return;
+        seen++;
+        if (seen % stride !== 0) return;
         const a = patchMean(query.work, c.sx, c.sy);
         const b = patchMean(train.work, c.dx, c.dy);
         if (a === null || b === null) return;
-        sumA += a;
-        sumB += b;
-        count++;
+        samples.push({ ax: c.sx, ay: c.sy, intensityA: a, bx: c.dx, by: c.dy, intensityB: b });
     });
-    return count === 0 ? [1, 1] : [sumA / count, sumB / count];
+    return samples;
+}
+
+function meanIntensities(samples: readonly IntensitySample[]): [number, number] {
+    if (samples.length === 0) return [1, 1];
+    let sumA = 0;
+    let sumB = 0;
+    for (const sample of samples) {
+        sumA += sample.intensityA;
+        sumB += sample.intensityB;
+    }
+    return [sumA / samples.length, sumB / samples.length];
 }
 
 function patchMean(image: ColorImage, x: number, y: number): number | null {

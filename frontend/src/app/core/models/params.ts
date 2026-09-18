@@ -41,6 +41,7 @@ export interface GlobalParams {
     bundleWindow: number;
     bundleIterations: number;
     refineFocal: boolean;
+    refineDistortion: boolean;
     candidateNeighbours: number;
     keyframeMinAngle: number;
 }
@@ -56,6 +57,7 @@ export interface ComposeParams {
     deghost: boolean;
     deghostThreshold: number;
     exposureCompensation: boolean;
+    vignetting: boolean;
     composeWidth: number;
     exportScale: number;
     exportMegapixels: number;
@@ -107,6 +109,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
         bundleWindow: 6,
         bundleIterations: 12,
         refineFocal: true,
+        refineDistortion: true,
         candidateNeighbours: 5,
         keyframeMinAngle: 3,
     },
@@ -121,6 +124,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
         deghost: true,
         deghostThreshold: 34,
         exposureCompensation: true,
+        vignetting: true,
         composeWidth: 1600,
         exportScale: 1,
         exportMegapixels: 8,

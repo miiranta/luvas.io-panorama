@@ -1,5 +1,6 @@
 import { Mat3, mat3Transpose } from '../src/app/vision/math/matrix3';
 import { ColorImage } from '../src/app/vision/imaging/image';
+import { undistort } from '../src/app/vision/geometry/lens';
 
 export function deg(value: number): number {
     return (value * Math.PI) / 180;
@@ -59,16 +60,20 @@ export function renderView(
     focal: number,
     width: number,
     height: number,
+    distortion = 0,
+    vignetting = 0,
 ): ColorImage {
     const data = new Uint8ClampedArray(width * height * 4);
     const rt = mat3Transpose(rotation);
     const sample = new Float64Array(3);
+    const lens = new Float64Array(2);
     const cx = width / 2;
     const cy = height / 2;
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-            const ax = (x + 0.5 - cx) / focal;
-            const ay = (y + 0.5 - cy) / focal;
+            undistort((x + 0.5 - cx) / focal, (y + 0.5 - cy) / focal, distortion, lens);
+            const ax = lens[0];
+            const ay = lens[1];
             const norm = Math.hypot(ax, ay, 1);
             const dx = (rt[0] * ax + rt[1] * ay + rt[2]) / norm;
             const dy = (rt[3] * ax + rt[4] * ay + rt[5]) / norm;
@@ -76,10 +81,13 @@ export function renderView(
             const theta = Math.atan2(dx, dz);
             const phi = Math.asin(Math.min(1, Math.max(-1, dy)));
             world.sample(theta, phi, sample);
+            const rx = (x + 0.5 - cx) / focal;
+            const ry = (y + 0.5 - cy) / focal;
+            const falloff = Math.max(0.05, 1 + vignetting * (rx * rx + ry * ry));
             const i = (y * width + x) * 4;
-            data[i] = sample[0];
-            data[i + 1] = sample[1];
-            data[i + 2] = sample[2];
+            data[i] = sample[0] * falloff;
+            data[i + 1] = sample[1] * falloff;
+            data[i + 2] = sample[2] * falloff;
             data[i + 3] = 255;
         }
     }

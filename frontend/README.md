@@ -3,7 +3,7 @@
 App Angular que funciona como uma câmera: cada foto tirada é detectada, casada com as fotos
 vizinhas, alinhada por homografia robusta e integrada num mosaico que cresce em tempo real. Os
 parâmetros de todas as etapas são editáveis durante a captura e o resultado é exportável como uma
-única imagem PNG.
+única imagem PNG, composta de novo do zero na resolução nativa das fotos.
 
 Todo o processamento é próprio (sem OpenCV): detector, descritor, casamento, RANSAC, estimativa de
 focal, bundle adjustment, projeção e mistura estão implementados em TypeScript sobre `Float32Array`
@@ -22,9 +22,9 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm run verify                      # 27 checagens numéricas contra ground truth sintético
+npm run verify                      # 62 checagens numéricas contra ground truth sintético
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
-npm run e2e                         # 16 checagens ponta a ponta em Chrome headless
+npm run e2e                         # 27 checagens ponta a ponta em Chrome headless
 ```
 
 ## Interface
@@ -37,7 +37,9 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
 - **HUD (topo)** — número de fotos integradas/descartadas e o **ângulo de visão já coberto**
   (ex. `114° × 45°`), medido da caixa envolvente do mosaico na superfície escolhida.
 - **Minimapa (topo, centro)** — o mosaico recortado na região coberta, atualizado a cada foto;
-  toque amplia; **⬇** exporta o PNG e, ampliado, **✕** fecha.
+  toque amplia; **⬇** exporta o PNG e, ampliado, **✕** fecha. Um selo diz o tempo todo que aquilo é
+  uma **prévia** (`PREVIEW`); enquanto o worker compõe, o selo vira `COMPOSITING` com um spinner e o
+  **⬇** fica bloqueado — só dá para exportar quando a composição terminou.
 - **Linhas só sobre a câmera** — o vídeo fica na camada mais baixa, as linhas logo acima e todos
   os controles (HUD, minimapa, disparador, botões) acima das linhas, pela escala única de
   `styles/_layers.scss`.
@@ -45,17 +47,18 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
   continuamente (a cada ~260 ms) contra as câmeras já registradas e os pares aparecem desenhados
   sobre a própria imagem: ponto **rosa** onde a característica está no panorama, ponto **amarelo**
   onde está agora e uma linha ligando os dois. A legenda diz em palavras se dá para fotografar —
-  verde `sobreposição suficiente` ou vermelho `sobreposição insuficiente — volte ao enquadramento
-  anterior` — com a contagem de pontos, o erro em px e contra qual foto está casando.
+  verde `ready to shoot` ou vermelho `not enough overlap` — com a contagem de pontos, o erro em px
+  e contra qual foto está casando.
 - **Comparação (popup)** — aberta pelo botão **▯▯**: as duas fotos lado a lado com todos os
   pares — inliers em amarelo, aceitos pelo ratio test em laranja, rejeitados tracejados — e os
   keypoints com a orientação (Etapa 3.3); **✕** ou um toque fora fecha. Nada fica sobre a câmera.
-- **⚙ Parâmetros** — painel lateral com 10 controles essenciais e `mais opções` para os 26
+- **⚙ Parâmetros** — painel lateral com os controles essenciais e `more options` para os 29
   avançados; **✕** fecha. Mudanças em composição/global recompõem o mosaico na hora.
 - **ⓘ Diagnóstico** — grafo de vizinhança (arestas do MST em destaque, intrusas tracejadas), ordem
-  inferida, ângulo coberto, focal, erro de reprojeção, % de pixels inconsistentes, memória ocupada,
-  acelerador em uso e custo por etapa; **✕** fecha.
-- Um indicador de carregamento aparece enquanto o worker inicializa ou processa.
+  inferida, ângulo coberto, focal, distorção da lente κ₁, vinheta β, erro de reprojeção, % de
+  pixels inconsistentes, memória ocupada, acelerador de cada etapa e custo por etapa; **✕** fecha.
+- Um indicador de carregamento mostra a etapa e o progresso (ex. `rendering export 63%`) sempre que
+  o worker inicializa, integra uma foto, recompõe, refina o alinhamento ou exporta.
 
 ## Planejamento para um número ilimitado de fotos
 
@@ -78,48 +81,69 @@ automática a partir de um conjunto embaralhado.
 
 **3. Otimizar e recompor tudo a cada foto (descartado).** Bundle adjustment global é O(N) por
 iteração e recompor o mosaico é O(N·footprint) — juntos davam O(N²) e foi o que o teste de escala
-mostrou primeiro (218 ms na 1ª foto → 4533 ms na 25ª). A solução tem duas partes:
+mostrou primeiro (218 ms na 1ª foto → 4533 ms na 25ª). A solução separa o que precisa ser rápido
+(capturar) do que precisa ser exato (a imagem final):
 
-- **Bundle em janela deslizante**: só as últimas `W` câmeras (padrão 6) são livres; as anteriores
-  entram como âncoras fixas. Custo O(W³ + observações da janela), constante em N. Levenberg-Marquardt
-  com incrementos em eixo-ângulo, focal opcionalmente livre.
-- **Mosaico em dois acumuladores**: as câmeras que já saíram da janela têm pose final e são
-  **comprometidas** uma única vez no acumulador `committed`; as da janela vivem num `preview`
-  reconstruído a cada foto (O(W·footprint)). A renderização soma os dois acumuladores banda a banda,
-  então não há emenda entre as partes.
+- **Bundle em janela deslizante durante a captura**: só as últimas `W` câmeras (padrão 6) são
+  livres; as anteriores entram como âncoras fixas. Custo O(W³ + observações da janela), constante
+  em N.
+- **Refino global quando a app fica ociosa**: ~0,4 s depois da última requisição o worker roda o
+  bundle adjustment com **todas** as câmeras livres (o alinhamento global de Brown & Lowe, que
+  elimina a deriva que a janela não enxerga) e, se alguma pose, focal, ganho, κ₁ ou β mudou o
+  suficiente para aparecer, recompõe a prévia. Uma nova foto cancela esse passo.
+- **Prévia em dois acumuladores**: as câmeras que já saíram da janela são **comprometidas** uma
+  única vez no acumulador `committed`; as 3 mais recentes vivem num `preview` redesenhado a cada
+  foto. A renderização soma os dois acumuladores banda a banda, então não há emenda entre as partes.
+- **Exportação separada da prévia**: o PNG nunca é a prévia. Ele é composto de novo do zero, com
+  todas as fotos e as poses finais, numa tela recortada na região coberta e amostrada na resolução
+  nativa das fotos (veja *Exportação*).
 
-O ponto central é que **a saída é um acumulador de tamanho fixo**, não uma lista de camadas: uma
+O ponto central é que **a prévia é um acumulador de tamanho fixo**, não uma lista de camadas: uma
 tela na superfície escolhida (plano por padrão, cilindro ou esfera equirretangular) guardando
-`Σw·I` e `Σw` por banda. A memória do mosaico depende da resolução escolhida, nunca do número de
-fotos, e cada foto só toca o próprio footprint angular. Para varreduras largas troque a superfície
-para cilíndrica ou esférica no painel — o plano estoura perto de 90°.
+`Σw·I` e `Σw` por banda da pirâmide. A memória da prévia depende da resolução escolhida, nunca do
+número de fotos, e cada foto só toca o próprio footprint angular. Para varreduras largas troque a
+superfície para cilíndrica ou esférica no painel — o plano estoura perto de 90°.
 
-### Custo por foto (medido, `npm run verify`)
+### Custo por foto (medido, `node tools/profile.mjs`, RTX 4070)
 
-| etapa | complexidade por foto nova | medido (26 fotos, 480 px) |
+| etapa | complexidade por foto nova | GPU | CPU |
+|---|---|---|---|
+| detectar | O(pixels) | 85 ms | 94 ms |
+| casar | O(k · n_kp²), k ≤ 5 | 24 ms | 62 ms |
+| bundle (janela) | O(W³ + obs) | 14 ms | 18 ms |
+| compor a prévia | O(3 · footprint) | 334 ms | 408 ms |
+
+O custo não cresce com N depois que a janela enche. O refino global e a recomposição completa da
+prévia acontecem fora da captura, no tempo ocioso.
+
+### Exportação
+
+A prévia usa uma tela de 360° com `canvasWidth` px (1792 por padrão), então um panorama de 100°
+ocupa só ~500 px dela. Exportar essa tela era o motivo do PNG sair borrado. A exportação agora:
+
+1. escolhe a escala da tela para amostrar as fotos na resolução nativa — `2π·f` px por volta no
+   cilindro/esfera e `2,4·f` no plano, com `f` a focal na resolução de composição;
+2. calcula a união dos footprints de todas as fotos **antes** de alocar e aloca só esse recorte
+   (alinhado à grade da pirâmide); se passar de `exportMegapixels` (8 MP por padrão), reduz a escala
+   até caber;
+3. compõe todas as fotos com as poses finais (warp na GPU, costura, ganhos, pirâmide laplaciana),
+   reportando progresso por foto.
+
+| cena sintética | prévia | exportação |
 |---|---|---|
-| detectar + descrever | O(pixels) | 76–106 ms |
-| casar | O(k · n_kp²), k ≤ 5 | 72–129 ms |
-| modelo (RANSAC) | O(iter · pares) | 1–4 ms |
-| bundle (janela) | O(W³ + obs) | 4–14 ms |
-| compor | O(W · footprint · bandas) | 190–260 ms |
-| **total** | **O(1) em N** | **350 → 470 ms, estável** |
+| cilíndrica, 4 fotos | 260×107 | 1024×448 |
+| varredura horizontal, 6 fotos | 902×361 | 1408×704 |
 
-Depois que a janela enche, o custo não cresce: 385 ms na média das fotos 8–16 contra 441 ms nas
-17–26 (a variação restante é o footprint mudando de tamanho, não N).
+`exportScale` (fração da resolução nativa) e `exportMegapixels` (teto de memória) ficam nas opções
+avançadas.
 
 ### Armazenamento para sessões longas
 
-Guardar cada foto como RGBA cru (960×720 = 2,7 MB) limitava a sessão. Agora, quando uma câmera sai
-da janela quente (8 quadros), sua imagem de composição é **comprimida em JPEG** com
-`OffscreenCanvas.convertToBlob` e o buffer cru é liberado; na recomposição o blob é decodificado sob
-demanda com `createImageBitmap`. Isso troca ~2,7 MB por ~130 kB por foto:
-
-| por foto | descritores | rotação | fonte comprimida | total |
-|---|---|---|---|---|
-| bytes | ≈29 kB | 72 B | ≈130 kB | **≈160 kB** |
-
-Mil fotos ≈ 160 MB, e o número de fotos deixa de ser o limite: qualquer mudança de parâmetro
+Guardar cada foto como RGBA cru (1600×1200 = 7,7 MB na resolução de composição padrão) limitava a
+sessão. Quando uma câmera sai da janela quente (8 quadros), sua imagem de composição é **comprimida
+em JPEG** (qualidade 0,94) com `OffscreenCanvas.convertToBlob` e o buffer cru é liberado; na
+recomposição o blob é decodificado sob demanda com `createImageBitmap`. Isso troca ~7,7 MB por
+~0,4 MB por foto, e o número de fotos deixa de ser o limite: qualquer mudança de parâmetro
 recompõe **todas** as fotos da sessão, não só as recentes. O painel ⓘ mostra a memória ocupada. Em
 ambientes sem `OffscreenCanvas` (por exemplo o harness em Node) o código cai no comportamento
 antigo, mantendo cru as últimas 60 fotos.
@@ -138,12 +162,13 @@ detalhes importam:
 
 ### Aceleração por GPU
 
-Três etapas rodam em **WebGL2** dentro do worker, todas num único contexto compartilhado
+Quatro etapas rodam em **WebGL2** dentro do worker, todas num único contexto compartilhado
 (`vision/acceleration/gl-context.ts`):
 
 | etapa | shader | conferência contra a CPU |
 |---|---|---|
-| mistura multibanda | gaussiana separável em `RGBA32F` (RGB·m e m no alfa, a convolução normalizada `Ĝ = G(m·I)/G(m)`), níveis encadeados na GPU | erro médio < 0,5 nível de cinza |
+| warp | raio da tela → câmera → distorção κ₁ → amostragem com **mipmaps** (trilinear) → ganho e vinheta; saída RGBA8 | erro médio < 1,5 nível de cinza, máscara < 0,02 |
+| pirâmide da mistura | redução binomial 5×5 com decimação por 2 em `RGBA32F` (cor·m e m) | erro médio < 0,75 |
 | detecção | gaussiana σ_d → Sobel → produtos `Ix², Iy², IxIy` → gaussiana σ_i → Harris / Shi-Tomasi | pico ±5 %, erro médio ≤ 1 % do pico |
 | casamento | força bruta em Hamming com `popcount` em `RGBA32UI`, melhor e segundo melhor por descritor | igual bit a bit |
 
@@ -156,29 +181,18 @@ Três etapas rodam em **WebGL2** dentro do worker, todas num único contexto com
   `compor` ficou **mais lento** fim a fim (1288 ms contra 902 ms): chamadas pequenas pagam upload e
   `readPixels` síncrono, que custam mais do que a convolução economiza.
 
-Por isso cada etapa passa por um `BackendSelector` (`backend-selector.ts`) que, na primeira vez que
-é usada, **(1)** compara GPU e CPU numericamente e **(2)** mede as duas numa escada de tamanhos
-(96² → 768² px no blur, 160×120 → 640×480 na detecção, 100 → 900 descritores no casamento). O
-primeiro degrau em que a GPU é ≥ 15 % mais rápida vira o **limiar**; um `RoutedBackend` manda cada
-chamada para a GPU só acima dele e volta para a CPU se a GPU falhar (desiste depois de 3 falhas). O
-painel ⓘ mostra a decisão, ex. `webgl2 (gpu a partir de 192² px) · gpu 6.9ms vs cpu 52.9ms`, e o
-toggle `GPU` nas opções avançadas desliga tudo. Os limiares são medidos em cada sessão e variam
-com a carga da máquina — em execuções seguidas do E2E o casamento foi para a GPU a partir de 300 ou
-de 900 descritores —, e é esse o ponto: a decisão sai da medição naquela máquina, não de uma
-constante.
+Por isso cada etapa passa por um `BackendSelector` (`backend-selector.ts`) que **(1)** compara GPU e
+CPU numericamente e **(2)** mede as duas numa escada de tamanhos. O primeiro degrau em que a GPU é
+≥ 15 % mais rápida vira o **limiar**; um `RoutedBackend` manda cada chamada para a GPU só acima dele
+e volta para a CPU se a GPU falhar (desiste depois de 3 falhas). A calibração roda quando o worker
+sobe, antes de ele se declarar pronto, então não pesa na primeira foto. O painel ⓘ mostra a
+decisão, ex. `webgl2 (gpu from 256² px) · gpu 7.0ms vs cpu 38.6ms`, e o toggle `GPU` nas opções
+avançadas desliga tudo.
 
-Resultado com a escada (`node tools/profile.mjs`, RTX 4070, 5 quadros integrados em cada modo,
-média por foto):
-
-| etapa | GPU | CPU |
-|---|---|---|
-| detectar (+ descrever) | 223 ms | 214 ms |
-| casar | 25 ms | 41 ms |
-| compor | 1218 ms | 1736 ms |
-
-A detecção empata porque o que sobra nela é CPU — supressão não-máxima, ANMS (quadrática nos
-candidatos) e amostragem do BRIEF —, não os mapas de resposta. O tempo de `compor` varia com a
-área do mosaico, então compare as colunas, não com outras tabelas.
+Dois cuidados deixam o warp barato na GPU: a textura da fonte (com mipmaps) fica em cache enquanto
+a mesma foto é redesenhada, e a leitura volta em 8 bits (a fonte já é 8 bits), o que corta 4× o
+`readPixels` em relação a float e dispensa `EXT_color_buffer_float` — mais celulares ficam com o
+warp na GPU.
 
 A camada de vetores desenha num canvas `desynchronized` e o vídeo e o overlay são promovidos a
 camadas de composição próprias, para o navegador compor na GPU.
@@ -188,7 +202,8 @@ camadas de composição próprias, para o navegador compor na GPU.
 Min-cut sobre todas as camadas exigiria guardar todas as camadas. A costura é calculada
 incrementalmente entre o **mosaico existente** e a **foto nova**, só na faixa de sobreposição:
 Dijkstra multi-fonte a partir dos núcleos exclusivos de cada lado, com custo por pixel
-`1 + Δcor²`. O caminho resultante corta onde as imagens mais se parecem (Aula 08 §8.4.2). Onde a
+`1 + Δcor²`. Como no OpenCV (`seam_megapix`), a busca roda numa grade reduzida (`seamMegapixels`,
+0,2 MP por padrão; 0 busca na resolução cheia) e o rótulo é levado de volta a cada pixel. O caminho resultante corta onde as imagens mais se parecem (Aula 08 §8.4.2). Onde a
 diferença passa do limiar, o pixel é atribuído a uma única fonte em vez de misturado — é a
 "detecção de pixels inconsistentes" da Etapa 6.3, e é o que impede o objeto móvel de aparecer
 duplicado.
@@ -209,7 +224,7 @@ duplicado.
 │  StitcherService · signals(params, reports, mosaic, graph, connection)       │
 │  CameraService   · getUserMedia, contexto seguro, troca de dispositivo       │
 └───────────────┬──────────────────────────────────────────────▲───────────────┘
-                │ ImageData transferida (work 640px + compose 960px)           │
+                │ ImageData transferida (work 640px + compose 1600px)          │
                 │                                    FrameReport · MosaicPayload
                 │                                    GraphPayload · Connection │
 ┌───────────────▼──────────────────────────────────────────────┴───────────────┐
@@ -226,15 +241,15 @@ duplicado.
 │                                                               ▼              │
 │   graph ◄──── keyframes ◄──────────────────────────────── rotation           │
 │   MST (Kruskal)          índice por eixo óptico          f das homografias   │
-│   componentes            janela de bundle                R = K⁻¹HK → SO(3)   │
-│   ordem · intrusas                                       LM em eixo-ângulo   │
+│   componentes            bundle em janela               R = K⁻¹HK → SO(3)   │
+│   ordem · intrusas       + global quando ocioso          LM · Huber · κ₁     │
 │         │                                                     │              │
 │         └──────────────────► project ──────► compose ◄────────┘              │
-│                              esfera          warp inverso bilinear           │
+│                              esfera          warp inverso com mipmaps        │
 │                              cilindro        costura geodésica               │
-│                              plano           feather / multibanda            │
-│                              (raio por       ganho por exposição             │
-│                               pixel da tela) committed + preview             │
+│                              plano           feather / pirâmide laplaciana   │
+│                              (raio por       ganho + vinheta                 │
+│                               pixel da tela) prévia · exportação nativa      │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -260,10 +275,10 @@ src/app/
 ├─ workers/          stitch.worker — fila de mensagens → StitchPipeline
 └─ vision/
    ├─ math/          álgebra 3×3, Jacobi, SO(3)
-   ├─ imaging/       imagem, convolução, gaussiana, Sobel
+   ├─ imaging/       imagem, convolução, gaussiana, Sobel, mipmaps
    ├─ features/      tensor de estrutura, cantos, BRIEF, casamento
-   ├─ geometry/      modelos de transformação, RANSAC, câmera rotacional, bundle, grafo
-   ├─ compositing/   superfícies, warp, costura, exposição, horizonte, mosaico multibanda
+   ├─ geometry/      modelos de transformação, RANSAC, câmera rotacional, lente, bundle, grafo
+   ├─ compositing/   superfícies, warp, costura, exposição, vinheta, horizonte, pirâmide, mosaico
    ├─ acceleration/  WebGL2 e seleção medida entre GPU e CPU
    └─ pipeline/      orquestração incremental
 ```
@@ -271,13 +286,13 @@ src/app/
 | pasta | classes / funções principais | conceito | aula |
 |---|---|---|---|
 | `math/` | `matrix3`, `decomposition` (Jacobi, sistema linear), `so3` (eixo-ângulo, rotação mais próxima) | transformações, rotações | 01 |
-| `imaging/` | `toGray`, `gaussianKernel`, `blurGray`, `sobelGradients`, `blurInterleaved`, amostragem bilinear | convolução, filtro gaussiano, gradiente | 02–03 |
+| `imaging/` | `toGray`, `gaussianKernel`, `blurGray`, `sobelGradients`, `mipPyramidFor` + `sampleTrilinear` | convolução, filtro gaussiano, gradiente, pré-filtro antes de reduzir | 02–04 |
 | `features/` | `structureTensorMaps`, `CornerDetector` (Harris / Shi-Tomasi / FAST, NMS, ANMS, sub-pixel, orientação), `BriefDescriptor`, `DescriptorMatcher` (ratio test + cruzada) | detecção, descrição e casamento de características | 05 |
 | `geometry/` | `transform-model` (translação → homografia, DLT normalizado), `RansacEstimator` | transformações 2D, homografia, RANSAC | 07 |
-| `geometry/` | `rotational-camera` (K, f a partir de H, H → R), `BundleAdjuster`, `PoseGraph` (MST, componentes, referência) | modelo de câmera, alinhamento global, ordem das fotos | 01, 08 |
-| `compositing/` | `canvas-geometry` (plano / cilindro / esfera), `Warper`, `SeamFinder`, `ExposureCompensator`, `levelHorizon`, `Mosaic` | projeção, warp inverso, costura, compensação de exposição | 01, 08 |
-| `compositing/` | `Mosaic.addBands` | pirâmide laplaciana e mistura multibanda | 02, 04, 08 |
-| `acceleration/` | `GlContext`, `SeparableBlur`, `BackendSelector`, `RoutedBackend`, backends de blur / detecção / casamento | engenharia (fora das aulas) | — |
+| `geometry/` | `rotational-camera` (K, f a partir de H, H → R), `lens` (κ₁), `BundleAdjuster`, `PoseGraph` (MST, componentes, referência) | modelo de câmera, distorção radial, alinhamento global, ordem das fotos | 01, 08 |
+| `compositing/` | `canvas-geometry` (plano / cilindro / esfera), `Warper`, `SeamFinder`, `ExposureCompensator`, `estimateVignetting`, `levelHorizon`, `Mosaic` | projeção, warp inverso, costura, compensação de exposição e vinheta | 01, 08 |
+| `compositing/` | `pyramid`, `Mosaic.addPyramidBands` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
+| `acceleration/` | `GlContext`, `SeparableBlur`, `BackendSelector`, `RoutedBackend`, backends de warp / pirâmide / detecção / casamento | engenharia (fora das aulas) | — |
 | `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `MosaicCompositor`, `LiveTracker`, `AcceleratorSuite` | fluxo do enunciado, etapas 1–6 | T1 |
 
 `StitchPipeline.addFrame` lê como o enunciado: `features.extract` → `linkToNeighbours` (casamento
@@ -295,25 +310,47 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
 
 ### Matemática por etapa
 
-- **Detecção** (Aula 05 §7.1.1, `vision/features/`) — `A = Σ w·[[Ix², IxIy],[IxIy, Iy²]]` com σ_d para a derivada e σ_i
-  para a integração (σ_i > σ_d, como em Schmid et al.); `R = det(A) − α·tr(A)²` ou `min λ`
-  (Shi-Tomasi); limiar relativo ao pico, NMS, ANMS para cobertura uniforme e refino sub-pixel por
-  parábola.
+- **Detecção** (Aula 05 §7.1.1, `vision/features/`) — `A = Σ w·[[Ix², IxIy],[IxIy, Iy²]]` com σ_d
+  para a derivada e σ_i para a integração (σ_i > σ_d, como em Schmid et al.); `R = det(A) − α·tr(A)²`
+  ou `min λ` (Shi-Tomasi); limiar relativo ao pico; NMS por dilatação separável (máximo em janela
+  `(2r+1)²` em O(r) por pixel); ANMS por cobertura de quadrados (SSC, Bailo et al. 2018) com busca
+  binária do raio, O(n log n) em vez de O(n²); refino sub-pixel ajustando a **quadrática 2D
+  completa** (com o termo cruzado `∂²R/∂x∂y`) e tomando o vértice.
 - **Descrição e casamento** — orientação dominante por histograma de gradientes; BRIEF rodado pela
   orientação; distância de Hamming com `popcount`; ratio test `d₁/d₂ < 0,75` e checagem mútua.
-- **Modelo** (Aula 07 §8.1, `vision/geometry/`) — DLT com normalização de Hartley resolvido pelo autovetor de menor
-  autovalor de `AᵀA` (Jacobi); RANSAC com `N = log(1−p)/log(1−wᵏ)` adaptativo, reajuste nos inliers
-  e rejeição de homografias implausíveis (determinante, escala, cisalhamento).
+- **Modelo** (Aula 07 §8.1, `vision/geometry/`) — DLT com normalização de Hartley resolvido pelo
+  autovetor de menor autovalor de `AᵀA` (Jacobi); RANSAC com `N = log(1−p)/log(1−wᵏ)` adaptativo,
+  **erro de transferência simétrico** `√((d(Hx,x')² + d(H⁻¹x',x)²)/2)` (Hartley & Zisserman), reajuste
+  nos inliers e rejeição de homografias implausíveis (determinante, escala, cisalhamento).
 - **Focal e rotação** (Aula 08 §8.2.3) — com `K = diag(f,f,1)` centrada, a ortonormalidade das duas
   primeiras colunas de `R = K⁻¹HK` dá `f² = −(h₀₀h₀₁+h₁₀h₁₁)/(h₂₀h₂₁)` e
   `f² = (h₀₁²+h₁₁²−h₀₀²−h₁₀²)/(h₂₀²−h₂₁²)`; tomamos a mediana das estimativas de todos os pares. A
   matriz `K⁻¹HK` é projetada na rotação mais próxima por `R(RᵀR)^(−1/2)`.
-- **Alinhamento global** (Aula 08 §8.3) — LM minimizando erro de reprojeção das correspondências
-  inlier, com as observações agrupadas por par de câmeras (uma homografia por grupo, não por ponto).
-- **Composição** (Aula 08 §8.4, Aula 02 §3.5.5) — cada pixel da tela gera um raio, o raio vai para a
-  câmera por `R` e é amostrado bilinearmente na fonte (warp inverso, sem buracos); mistura por
-  feather ou multibanda com convolução normalizada `Ĝ = G(m·I)/G(m)`; ganhos por imagem resolvidos
-  em Gauss-Seidel sobre as médias de intensidade nas sobreposições.
+- **Alinhamento global** (Aula 08 §8.3, Brown & Lowe 2007 §4) — Levenberg-Marquardt sobre o erro de
+  reprojeção **nos dois sentidos** de cada correspondência, com erro robusto de **Huber (σ = 2 px)**
+  e a covariância a priori do artigo (`σ_θ = π/16`, `σ_f = f̄/10`) como amortecimento. As derivadas
+  em relação às rotações são **analíticas** (regra da cadeia pela projeção e pela distorção); as de
+  `f` e κ₁ são diferenças centrais. Conferido contra diferenças finitas (erro relativo 1e-4).
+- **Distorção radial** (Aula 01 §2.1.5, Aula 08 §8.2.1) — um termo, `d = n·(1 + κ₁|n|²)` em
+  coordenadas normalizadas pela focal. κ₁ é um parâmetro compartilhado do bundle (a partir de 3
+  câmeras, a priori σ = 0,1): as observações ficam em pixels crus, o ponto de origem é
+  desdistorcido (Newton sobre o raio) e a projeção no destino é distorcida. O warp aplica a mesma
+  distorção ao buscar cada pixel na foto.
+- **Composição** (Aula 08 §8.4, Aula 02 §3.5.5, Aula 04 §3.5) — cada pixel da tela gera um raio, o
+  raio vai para a câmera por `R`, é distorcido por κ₁ e amostrado na fonte (warp inverso, sem
+  buracos). Quando a tela reduz a foto, a amostragem usa **mipmaps** com nível escolhido pela
+  derivada local do mapeamento (o pré-filtro antes de decimar da Aula 04); quando amplia, bilinear.
+  Multibanda por **pirâmide laplaciana** de Burt & Adelson: cada foto vira pirâmide gaussiana
+  (binomial 5×5, decimação por 2) e cada banda é acumulada **na própria resolução** da pirâmide
+  (tiles alinhados a múltiplos de 64 px para as grades coincidirem); a imagem é reconstruída
+  expandindo do nível mais grosso ao mais fino só na região coberta.
+- **Exposição e vinheta** (Aula 08 §8.4, Brown & Lowe §6) — ganhos por imagem minimizando
+  `½ ΣΣ N_ij((g_i Ī_ij − g_j Ī_ji)²/σ_N² + (1 − g_i)²/σ_g²)` com os valores do artigo
+  (`σ_N = 10`, `σ_g = 0,1`) e `N_ij` a área de sobreposição. Antes disso, a vinheta
+  `V(r) = 1 + β r²` (Aula 01, queda cos⁴) é estimada por Gauss-Newton em log-intensidade a partir de
+  amostras nos inliers de cada par, junto com um log-ganho por câmera, com Huber e modelo de ruído
+  `σ = 0,08`; o warp divide cada pixel por `V(r)` e as médias de sobreposição são corrigidas antes
+  dos ganhos.
 - **Endireitamento** — vetor "para cima" como autovetor de menor autovalor da covariância dos eixos
   X das câmeras, aplicado como rotação global da tela.
 
@@ -323,22 +360,29 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
 zoom), renderiza vistas com rotação conhecida e confere o pipeline contra o ground truth:
 
 - focal a partir de H com erro < 2 % e `H → R` com desvio < 0,2°;
-- 6 fotos em varredura horizontal, grade de 2 fileiras, cilíndrica+feather e planar+afim: **todas**
-  integradas, focal recuperada com 0,4–2 % de erro, yaw com desvio máximo de 0,26–0,61°;
+- 6 fotos em varredura horizontal, grade de 2 fileiras, lente com barril (κ₁ = −0,10), lente com
+  vinheta (β = −0,25), cilíndrica+feather e planar+afim: **todas** integradas, focal recuperada com
+  0,4–2 % de erro, yaw dentro de 1,5°;
+- κ₁ recuperado (−0,11 para −0,10 renderizado) e β recuperado (−0,24 para −0,25), e nenhuma
+  vinheta inventada nas cenas sem vinheta (|β| < 0,1);
+- refino global preservando o alinhamento;
+- exportação amostrada acima da prévia e dentro do teto de megapixels;
 - bundle adjustment reduzindo o erro de reprojeção de 7–41 px para ~0,9 px;
 - imagem intrusa de outra cena rejeitada (4–5 inliers contra ~70 dos pares válidos);
 - objeto móvel detectado como pixels inconsistentes na sobreposição;
 - custo por foto estável com N crescente e no máximo 5 pares avaliados por foto.
 
-`npm run e2e` (24 checagens) sobe o Chrome headless com uma câmera falsa (`--use-file-for-fake-video-capture`
+`npm run e2e` (27 checagens) sobe o Chrome headless com uma câmera falsa (`--use-file-for-fake-video-capture`
 alimentado por um Y4M sintético), clica no disparador 7 vezes e confere no navegador real:
 getUserMedia, acumulação no canvas, HUD com o ângulo coberto, linhas desenhadas sobre a câmera
 (~50 k px pintados), rastreamento ao vivo (6/6 amostras), linhas atrás dos controles e só sobre o vídeo (ordem de
 empilhamento conferida), popup de comparação aberto pelo botão (74 inliers, 88 % dos pares,
 0,7 px) com o **✕** inteiro dentro do quadro, **✕** e **⬇** do minimapa ampliado sem
-sobreposição, os três aceleradores em WebGL2, selects refletindo os parâmetros ativos,
-recomposição ao trocar a superfície, grafo renderizado, diálogo de reinício que cancela sem apagar,
-ícones centrados (desvio 0,00 px), exportação do PNG e ausência de erros de console. Capturas de
+sobreposição, os quatro aceleradores de fato em WebGL2 (o rótulo precisa começar por `webgl2`),
+exportação bloqueada enquanto o selo diz `compositing` e liberada depois, exportação real de um PNG
+em resolução cheia, selects refletindo os parâmetros ativos, recomposição ao trocar a superfície,
+grafo renderizado, diálogo de reinício que cancela sem apagar, ícones centrados (desvio 0,00 px) e
+ausência de erros de console. Capturas de
 tela ficam em `/tmp/e2e`.
 
 ## Mapeamento com o enunciado
@@ -351,22 +395,28 @@ tela ficam em `/tmp/e2e`.
 | Etapa 4 — ordenação automática sem EXIF, matriz/grafo, intrusa rejeitada | `vision/geometry/pose-graph.ts`, overlay ⓘ, botão *reordenar* (`resolveFromScratch`) |
 | Etapa 5 — homografia por RANSAC, taxa de inliers, erro de reprojeção | `vision/geometry/ransac.ts`; popup de comparação e overlay ⓘ reportam inliers, taxa e erro |
 | Etapa 6 — composição, blending, deghosting | `vision/compositing/`: feather, multibanda, costura geodésica, pixels inconsistentes |
-| X1 — ajuste global em vez de encadeamento | bundle adjustment em janela (`vision/geometry/bundle-adjuster.ts`) |
+| X1 — ajuste global em vez de encadeamento | bundle adjustment em janela durante a captura e global no tempo ocioso (`vision/geometry/bundle-adjuster.ts`) |
 | X2 — 360° com projeção cilíndrica/esférica | `surface` no painel (padrão plano); cilindro cobre 360° e a esfera 360°×180° |
-| X3 — compensação de exposição | ganhos por imagem estimados nas sobreposições |
+| X3 — compensação de exposição | ganhos por imagem estimados nas sobreposições, com a vinheta removida antes |
 | X4 — comparação com referência pronta | **não feito**: não há `cv2.Stitcher` no navegador; a comparação precisa ser externa |
 
 ## Limites conhecidos
 
 - **Paralaxe**: o modelo rotacional pressupõe giro no centro óptico. Cenas próximas com giro fora do
   ponto nodal deixam desalinhamento que nenhum bundle resolve — a costura esconde, não corrige.
-- **Sem correção de distorção radial**: o enunciado menciona (Aula 08 §8.2.1) e não implementamos;
-  lentes muito grande-angulares vão casar pior nas bordas.
+- **Distorção radial com um termo só**: κ₁ cobre o barril/almofada típicos de celular; lentes
+  muito grande-angulares (olho de peixe) pediriam κ₂ ou um modelo equidistante.
+- **Homografias par a par sem desdistorção**: RANSAC e a focal inicial usam os pontos crus; só o
+  bundle modela κ₁. Com distorção forte a inicialização é pior, mas o bundle converge.
 - **Escala**: o detector é de escala única (Harris/FAST). Aproximar ou afastar muito entre fotos
   reduz a repetibilidade; um detector DoG multiescala resolveria.
 - **Sem importação de arquivos**: a app só trabalha com a câmera ao vivo; para testar sem câmera,
   use a câmera falsa do Chrome (`npm run fakecam` + `npm run e2e`).
-- **Recompressão JPEG** das fontes arquivadas introduz uma perda pequena mas real na mistura de
-  fotos antigas quando um parâmetro é alterado depois.
-- **Custo de composição** domina (~200 ms/foto): as bandas coarse são convoluções em resolução cheia
-  no tile, não uma pirâmide decimada. Uma pirâmide real ou WebGL derrubaria isso.
+- **Recompressão JPEG** (qualidade 0,94) das fontes arquivadas introduz uma perda pequena na
+  mistura de fotos antigas quando um parâmetro é alterado depois e na exportação.
+- **Teto de exportação**: acima de `exportMegapixels` a exportação reduz a escala para caber na
+  memória (os acumuladores custam ~55 B/pixel). Uma volta completa de 360° na resolução nativa de um
+  celular não cabe no padrão de 8 MP.
+- **Custo de composição da prévia** ainda domina (~330 ms/foto com GPU): a redução da pirâmide e o
+  warp estão na GPU, mas a acumulação das bandas, a costura e a reconstrução ainda são CPU. Manter
+  os acumuladores como texturas levaria o resto para a GPU.

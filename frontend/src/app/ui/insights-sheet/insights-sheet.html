@@ -65,6 +65,14 @@
                         <dd>{{ m.focal.toFixed(0) }} px</dd>
                     </div>
                     <div>
+                        <dt>lens κ₁</dt>
+                        <dd>{{ m.distortion.toFixed(3) }}</dd>
+                    </div>
+                    <div>
+                        <dt>vignetting β</dt>
+                        <dd>{{ m.vignetting.toFixed(3) }}</dd>
+                    </div>
+                    <div>
                         <dt>memory</dt>
                         <dd>{{ (m.storedBytes / 1048576).toFixed(1) }} MB</dd>
                     </div>

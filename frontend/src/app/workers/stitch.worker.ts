@@ -185,5 +185,12 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
         });
 });
 
-post({ kind: 'ready' });
-postState('ready', 1);
+queue = queue.then(() => {
+    try {
+        pipeline.warmup();
+    } catch (error) {
+        post({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+    }
+    post({ kind: 'ready' });
+    postState('ready', 1);
+});

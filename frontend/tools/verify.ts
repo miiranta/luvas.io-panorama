@@ -28,7 +28,12 @@ async function runScenario(
     params: PipelineParams,
     yaws: number[],
     pitches: number[],
-    options: { moving?: boolean; intruder?: boolean } = {},
+    options: {
+        moving?: boolean;
+        intruder?: boolean;
+        distortion?: number;
+        vignetting?: number;
+    } = {},
 ): Promise<void> {
     console.log(`\n=== ${title} ===`);
     const world = buildWorld(7);
@@ -46,7 +51,15 @@ async function runScenario(
             rotationFromAxisAngle(0, deg(yaws[i]), 0),
         );
         truth.push(rotation);
-        const view = renderView(world, rotation, focalTruth, viewWidth, viewHeight);
+        const view = renderView(
+            world,
+            rotation,
+            focalTruth,
+            viewWidth,
+            viewHeight,
+            options.distortion ?? 0,
+            options.vignetting ?? 0,
+        );
         if (options.moving && i >= 1) {
             paintMovingObject(view, 180 + i * 90, 240, 26);
         }
@@ -82,7 +95,7 @@ async function runScenario(
     check(
         `${title}: all frames merged`,
         accepted.length === yaws.length,
-        `${accepted.length}/${yaws.length} aceitos`,
+        `${accepted.length}/${yaws.length} accepted`,
     );
 
     const focalError =
@@ -129,6 +142,21 @@ async function runScenario(
     );
 
     await pipeline.settle();
+    if (options.distortion !== undefined) {
+        const recovered = pipeline.mosaicPayload()?.distortion ?? Number.NaN;
+        check(
+            `${title}: lens distortion recovered`,
+            Math.abs(recovered - options.distortion) < 0.03,
+            `κ₁ ${recovered.toFixed(3)} vs ${options.distortion.toFixed(3)} rendered`,
+        );
+    }
+    const vignetting = pipeline.mosaicPayload()?.vignetting ?? Number.NaN;
+    const truthVignetting = options.vignetting ?? 0;
+    check(
+        `${title}: vignetting ${options.vignetting === undefined ? 'not invented' : 'recovered'}`,
+        Math.abs(vignetting - truthVignetting) < (options.vignetting === undefined ? 0.1 : 0.06),
+        `β ${vignetting.toFixed(3)} vs ${truthVignetting.toFixed(3)} rendered`,
+    );
     const settledGraph = pipeline.graph();
     const settledErrors: number[] = [];
     const settledBase = settledGraph.nodes.find((n) => n.label === '#1');
@@ -229,6 +257,22 @@ await runScenario(
     [0, 14, 28, 28, 14, 0],
     [0, 0, 0, 12, 12, 12],
     { moving: true },
+);
+
+await runScenario(
+    'barrel lens κ₁ = -0.10',
+    structuredClone(fast),
+    [0, 12, 24, 36, 48, 60],
+    [0, 0, 0, 0, 0, 0],
+    { distortion: -0.1 },
+);
+
+await runScenario(
+    'vignetted lens β = -0.25',
+    structuredClone(fast),
+    [0, 12, 24, 36, 48, 60],
+    [0, 0, 0, 0, 0, 0],
+    { vignetting: -0.25 },
 );
 
 const cylindrical = structuredClone(fast);
