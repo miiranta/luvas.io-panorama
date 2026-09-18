@@ -184,6 +184,17 @@ export function transferError(m: Mat3, p: Correspondence): number {
     return Math.hypot(x - p.dx, y - p.dy);
 }
 
+export function symmetricTransferError(m: Mat3, inverse: Mat3 | null, p: Correspondence): number {
+    const forward = transferError(m, p);
+    if (!inverse) return forward;
+    const w = inverse[6] * p.dx + inverse[7] * p.dy + inverse[8];
+    if (Math.abs(w) < 1e-12) return Number.POSITIVE_INFINITY;
+    const x = (inverse[0] * p.dx + inverse[1] * p.dy + inverse[2]) / w;
+    const y = (inverse[3] * p.dx + inverse[4] * p.dy + inverse[5]) / w;
+    const backward = Math.hypot(x - p.sx, y - p.sy);
+    return Math.sqrt((forward * forward + backward * backward) / 2);
+}
+
 export function isPlausibleHomography(m: Mat3, kind: ModelKind, maxSkew: number): boolean {
     for (let i = 0; i < 9; i++) if (!isFinite(m[i])) return false;
     const det = m[0] * m[4] - m[1] * m[3];

@@ -109,6 +109,10 @@ export class GlContext {
         return this.texture(width, height, this.gl.RGBA32F, this.gl.RGBA, this.gl.FLOAT);
     }
 
+    byteTexture(width: number, height: number): WebGLTexture | null {
+        return this.texture(width, height, this.gl.RGBA8, this.gl.RGBA, this.gl.UNSIGNED_BYTE);
+    }
+
     uintTexture(width: number, height: number): WebGLTexture | null {
         return this.texture(
             width,

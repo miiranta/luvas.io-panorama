@@ -355,6 +355,18 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
     },
     {
         group: 'compose',
+        key: 'seamMegapixels',
+        label: 'Seam detail',
+        hint: 'Megapixels used to search the seam; 0 searches at full resolution',
+        kind: 'range',
+        min: 0,
+        max: 2,
+        step: 0.05,
+        advanced: true,
+        restage: 'compose',
+    },
+    {
+        group: 'compose',
         key: 'deghost',
         label: 'Deghost',
         hint: 'Where images disagree, uses a single source instead of the average',

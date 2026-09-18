@@ -13,4 +13,5 @@ export interface PairLink {
     observations: BundleObservation[];
     meanIntensityA: number;
     meanIntensityB: number;
+    overlapPixels: number;
 }

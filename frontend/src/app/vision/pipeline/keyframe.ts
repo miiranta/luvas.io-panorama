@@ -2,7 +2,7 @@ import { Keypoint } from '../features/keypoint';
 import { ColorImage } from '../imaging/image';
 import { Mat3, mat3Identity } from '../math/matrix3';
 
-const ARCHIVE_QUALITY = 0.88;
+const ARCHIVE_QUALITY = 0.94;
 
 export class Keyframe {
     rotation: Mat3;

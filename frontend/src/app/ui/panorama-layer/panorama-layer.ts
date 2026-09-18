@@ -28,6 +28,8 @@ export class PanoramaLayer {
 
     readonly mosaic = this.stitcher.mosaic;
     readonly saving = signal(false);
+    readonly composing = this.stitcher.composing;
+    readonly canExport = computed(() => this.stitcher.exportReady() && !this.saving());
     readonly size = computed(() => {
         const mosaic = this.mosaic();
         if (!mosaic) return '';
@@ -62,6 +64,7 @@ export class PanoramaLayer {
 
     async save(event: Event): Promise<void> {
         event.stopPropagation();
+        if (!this.canExport()) return;
         this.saving.set(true);
         try {
             const blob = await this.stitcher.exportPanorama();

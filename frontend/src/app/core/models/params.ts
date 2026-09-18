@@ -52,10 +52,13 @@ export interface ComposeParams {
     featherWidth: number;
     bands: number;
     seam: boolean;
+    seamMegapixels: number;
     deghost: boolean;
     deghostThreshold: number;
     exposureCompensation: boolean;
     composeWidth: number;
+    exportScale: number;
+    exportMegapixels: number;
     crop: boolean;
     gpu: boolean;
 }
@@ -112,12 +115,15 @@ export const DEFAULT_PARAMS: PipelineParams = {
         canvasWidth: 1792,
         blend: 'multiband',
         featherWidth: 32,
-        bands: 3,
+        bands: 4,
         seam: true,
+        seamMegapixels: 0.2,
         deghost: true,
         deghostThreshold: 34,
         exposureCompensation: true,
-        composeWidth: 960,
+        composeWidth: 1600,
+        exportScale: 1,
+        exportMegapixels: 8,
         crop: true,
         gpu: true,
     },

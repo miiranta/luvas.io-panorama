@@ -36,7 +36,7 @@ export class CornerDetector {
         for (let i = 0; i < response.length; i++) if (response[i] > peak) peak = response[i];
         const candidates = this.localMaxima(image, response, peak, params, borderMargin);
         const selected = params.adaptiveNms
-            ? adaptiveSuppression(candidates, params.maxKeypoints)
+            ? adaptiveSuppression(candidates, params.maxKeypoints, image.width, image.height)
             : candidates.sort((a, b) => b.response - a.response).slice(0, params.maxKeypoints);
         const radius = Math.max(4, Math.round(params.integrationSigma * 3));
         for (const keypoint of selected) {
@@ -63,12 +63,13 @@ export class CornerDetector {
         const threshold = peak * params.relativeThreshold;
         const radius = Math.max(1, Math.round(params.nmsRadius));
         const border = Math.max(radius + 1, borderMargin, 4);
+        const dilated = dilate(response, width, height, radius);
         const found: Keypoint[] = [];
         for (let y = border; y < height - border; y++) {
             for (let x = border; x < width - border; x++) {
                 const i = y * width + x;
                 const value = response[i];
-                if (value <= threshold || !isLocalMaximum(response, width, i, radius)) continue;
+                if (value <= threshold || dilated[i] > value) continue;
                 const [px, py] = params.subPixel ? refineSubPixel(response, width, x, y) : [x, y];
                 found.push({ x: px, y: py, response: value, orientation: 0 });
             }
@@ -77,19 +78,40 @@ export class CornerDetector {
     }
 }
 
-function isLocalMaximum(
+function dilate(
     response: Float32Array,
     width: number,
-    index: number,
+    height: number,
     radius: number,
-): boolean {
-    const value = response[index];
-    for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-            if ((dx !== 0 || dy !== 0) && response[index + dy * width + dx] > value) return false;
+): Float32Array {
+    const horizontal = new Float32Array(width * height);
+    const out = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+        const row = y * width;
+        for (let x = 0; x < width; x++) {
+            let best = -Infinity;
+            const from = Math.max(0, x - radius);
+            const to = Math.min(width - 1, x + radius);
+            for (let k = from; k <= to; k++) {
+                const value = response[row + k];
+                if (value > best) best = value;
+            }
+            horizontal[row + x] = best;
         }
     }
-    return true;
+    for (let x = 0; x < width; x++) {
+        for (let y = 0; y < height; y++) {
+            let best = -Infinity;
+            const from = Math.max(0, y - radius);
+            const to = Math.min(height - 1, y + radius);
+            for (let k = from; k <= to; k++) {
+                const value = horizontal[k * width + x];
+                if (value > best) best = value;
+            }
+            out[y * width + x] = best;
+        }
+    }
+    return out;
 }
 
 function refineSubPixel(
@@ -100,16 +122,22 @@ function refineSubPixel(
 ): [number, number] {
     const i = y * width + x;
     const value = response[i];
-    const dxx = response[i - 1] - 2 * value + response[i + 1];
-    const dyy = response[i - width] - 2 * value + response[i + width];
     const dx = (response[i + 1] - response[i - 1]) / 2;
     const dy = (response[i + width] - response[i - width]) / 2;
-    const px = Math.abs(dxx) > 1e-12 ? x - dx / dxx : x;
-    const py = Math.abs(dyy) > 1e-12 ? y - dy / dyy : y;
-    return [
-        isFinite(px) && Math.abs(px - x) <= 1 ? px : x,
-        isFinite(py) && Math.abs(py - y) <= 1 ? py : y,
-    ];
+    const dxx = response[i - 1] - 2 * value + response[i + 1];
+    const dyy = response[i - width] - 2 * value + response[i + width];
+    const dxy =
+        (response[i + width + 1] -
+            response[i + width - 1] -
+            response[i - width + 1] +
+            response[i - width - 1]) /
+        4;
+    const determinant = dxx * dyy - dxy * dxy;
+    if (Math.abs(determinant) < 1e-12) return [x, y];
+    const ox = -(dyy * dx - dxy * dy) / determinant;
+    const oy = -(dxx * dy - dxy * dx) / determinant;
+    if (!isFinite(ox) || !isFinite(oy) || Math.abs(ox) > 1 || Math.abs(oy) > 1) return [x, y];
+    return [x + ox, y + oy];
 }
 
 function fastSegmentTest(
@@ -193,24 +221,67 @@ function dominantOrientation(
     return (((best + offset + 0.5) / bins) * Math.PI * 2) % (Math.PI * 2);
 }
 
-function adaptiveSuppression(points: Keypoint[], limit: number): Keypoint[] {
+function coveringSuppression(
+    sorted: readonly Keypoint[],
+    width: number,
+    height: number,
+    radius: number,
+    limit: number,
+): Keypoint[] {
+    const cell = Math.max(1, radius);
+    const columns = Math.max(1, Math.ceil(width / cell));
+    const rows = Math.max(1, Math.ceil(height / cell));
+    const occupied = new Int32Array(columns * rows).fill(-1);
+    const kept: Keypoint[] = [];
+    for (let index = 0; index < sorted.length && kept.length < limit; index++) {
+        const point = sorted[index];
+        const column = Math.min(columns - 1, Math.floor(point.x / cell));
+        const row = Math.min(rows - 1, Math.floor(point.y / cell));
+        let blocked = false;
+        for (let r = Math.max(0, row - 1); r <= Math.min(rows - 1, row + 1) && !blocked; r++) {
+            for (let c = Math.max(0, column - 1); c <= Math.min(columns - 1, column + 1); c++) {
+                const other = occupied[r * columns + c];
+                if (other < 0) continue;
+                const dx = sorted[other].x - point.x;
+                const dy = sorted[other].y - point.y;
+                if (dx * dx + dy * dy < radius * radius) {
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        if (blocked) continue;
+        occupied[row * columns + column] = index;
+        kept.push(point);
+    }
+    return kept;
+}
+
+function adaptiveSuppression(
+    points: Keypoint[],
+    limit: number,
+    width: number,
+    height: number,
+): Keypoint[] {
     if (points.length <= limit) return points;
     const sorted = points.slice().sort((a, b) => b.response - a.response);
-    const capped = sorted.slice(0, Math.min(sorted.length, Math.max(limit * 4, 1200)));
-    const robust = 0.9;
-    const radii = new Float64Array(capped.length);
-    radii[0] = Number.POSITIVE_INFINITY;
-    for (let i = 1; i < capped.length; i++) {
-        let minDist = Number.POSITIVE_INFINITY;
-        for (let j = 0; j < i; j++) {
-            if (capped[i].response >= robust * capped[j].response) continue;
-            const dx = capped[i].x - capped[j].x;
-            const dy = capped[i].y - capped[j].y;
-            const d = dx * dx + dy * dy;
-            if (d < minDist) minDist = d;
+    let low = 1;
+    let high = Math.ceil(Math.hypot(width, height));
+    let best = sorted.slice(0, limit);
+    const tolerance = Math.max(1, Math.round(limit * 0.1));
+    for (let iteration = 0; iteration < 12 && low <= high; iteration++) {
+        const radius = (low + high) >> 1;
+        const kept = coveringSuppression(sorted, width, height, radius, limit);
+        if (kept.length >= limit - tolerance && kept.length <= limit) {
+            return kept;
         }
-        radii[i] = minDist;
+        if (kept.length > limit) {
+            low = radius + 1;
+            best = kept.slice(0, limit);
+        } else {
+            high = radius - 1;
+            if (kept.length > best.length || best.length > limit) best = kept;
+        }
     }
-    const order = Array.from(capped.keys()).sort((a, b) => radii[b] - radii[a]);
-    return order.slice(0, limit).map((i) => capped[i]);
+    return best.slice(0, limit);
 }

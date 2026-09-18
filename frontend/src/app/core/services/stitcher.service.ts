@@ -7,7 +7,7 @@ import {
     MosaicPayload,
     PreviewPayload,
 } from '../models/reports';
-import { WorkerRequest, WorkerResponse } from '../models/worker-protocol';
+import { PipelineState, WorkerRequest, WorkerResponse } from '../models/worker-protocol';
 
 const PREVIEW_INTERVAL = 260;
 
@@ -37,10 +37,17 @@ export class StitcherService {
     readonly ready = signal(false);
     readonly status = signal('waiting for camera');
     readonly error = signal<string | null>(null);
+    readonly working = signal(false);
+    readonly stale = signal(false);
+    readonly progress = signal(-1);
 
     readonly acceptedFrames = computed(() => this.reports().filter((r) => r.accepted).length);
     readonly rejectedFrames = computed(() => this.reports().filter((r) => !r.accepted).length);
     readonly lastReport = computed(() => this.reports().at(-1) ?? null);
+    readonly composing = computed(() => this.working() || this.stale());
+    readonly exportReady = computed(
+        () => this.mosaic() !== null && !this.composing() && this.acceptedFrames() > 0,
+    );
 
     start(): void {
         if (this.worker) return;
@@ -62,7 +69,7 @@ export class StitcherService {
         switch (message.kind) {
             case 'ready':
                 this.ready.set(true);
-                this.status.set('pronto');
+                this.status.set('ready');
                 break;
             case 'frame':
                 this.reports.update((list) => [...list, message.report]);
@@ -84,6 +91,9 @@ export class StitcherService {
                 if (message.epoch !== this.epoch) break;
                 this.previewInFlight = false;
                 this.preview.set(message.preview);
+                break;
+            case 'state':
+                this.applyState(message.state);
                 break;
             case 'progress':
                 this.status.set(message.detail);
@@ -109,6 +119,13 @@ export class StitcherService {
         }
     }
 
+    private applyState(state: PipelineState): void {
+        this.working.set(state.busy);
+        this.stale.set(state.stale);
+        this.progress.set(state.progress);
+        if (state.busy) this.status.set(state.stage);
+    }
+
     updateParam(group: ParamGroup, key: string, value: number | boolean | string): void {
         this.params.update((current) => {
             const next = structuredClone(current);
@@ -125,18 +142,14 @@ export class StitcherService {
 
     recompose(): void {
         if (this.reports().length === 0) return;
-        this.busy.set(true);
         this.status.set('recompositing mosaic');
         this.send({ kind: 'recompose' });
-        queueMicrotask(() => this.busy.set(false));
     }
 
     resolveFromScratch(): void {
         if (this.reports().length < 2) return;
-        this.busy.set(true);
         this.status.set('reordering from the graph');
         this.send({ kind: 'resolve' });
-        queueMicrotask(() => this.busy.set(false));
     }
 
     trackLive(source: HTMLVideoElement): void {
@@ -158,7 +171,7 @@ export class StitcherService {
 
     private tickPreview(): void {
         const source = this.previewSource;
-        if (!source || this.previewInFlight || this.busy()) return;
+        if (!source || this.previewInFlight || this.busy() || this.working()) return;
         if (this.reports().every((report) => !report.accepted)) return;
         if (source.readyState < 2 || !source.videoWidth) return;
         const frame = this.rasterize(

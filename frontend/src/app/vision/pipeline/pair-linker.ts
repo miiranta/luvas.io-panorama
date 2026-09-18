@@ -7,12 +7,14 @@ import { ModelFit, RansacEstimator } from '../geometry/ransac';
 import { focalFromHomography } from '../geometry/rotational-camera';
 import { Correspondence } from '../geometry/transform-model';
 import { ColorImage } from '../imaging/image';
+import { Mat3 } from '../math/matrix3';
 import { Keyframe } from './keyframe';
 import { PairLink } from './pair-link';
 
-const MAX_OBSERVATIONS_PER_PAIR = 60;
+const MAX_OBSERVATIONS_PER_PAIR = 120;
 const INTENSITY_PATCH_RADIUS = 3;
 const MIN_CORRESPONDENCES = 4;
+const OVERLAP_SAMPLES = 24;
 
 export interface PairMatch {
     fit: ModelFit | null;
@@ -88,6 +90,7 @@ export class PairLinker {
             observations: sampleObservations(query.id, train.id, correspondences, fit),
             meanIntensityA,
             meanIntensityB,
+            overlapPixels: overlapArea(query, train, fit.matrix),
         };
     }
 
@@ -119,6 +122,25 @@ function sampleObservations(
         observations.push({ cameraA, cameraB, ax: pair.sx, ay: pair.sy, bx: pair.dx, by: pair.dy });
     });
     return observations;
+}
+
+function overlapArea(query: Keyframe, train: Keyframe, matrix: Mat3): number {
+    let inside = 0;
+    let total = 0;
+    for (let row = 0; row < OVERLAP_SAMPLES; row++) {
+        for (let column = 0; column < OVERLAP_SAMPLES; column++) {
+            const sx = ((column + 0.5) / OVERLAP_SAMPLES) * query.workWidth;
+            const sy = ((row + 0.5) / OVERLAP_SAMPLES) * query.workHeight;
+            const w = matrix[6] * sx + matrix[7] * sy + matrix[8];
+            total++;
+            if (Math.abs(w) < 1e-9) continue;
+            const dx = (matrix[0] * sx + matrix[1] * sy + matrix[2]) / w;
+            const dy = (matrix[3] * sx + matrix[4] * sy + matrix[5]) / w;
+            if (dx >= 0 && dy >= 0 && dx < train.workWidth && dy < train.workHeight) inside++;
+        }
+    }
+    if (total === 0) return 0;
+    return (inside / total) * query.workWidth * query.workHeight;
 }
 
 function overlapIntensities(query: Keyframe, train: Keyframe, pair: FittedPair): [number, number] {

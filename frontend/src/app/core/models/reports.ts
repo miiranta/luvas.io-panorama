@@ -115,6 +115,7 @@ export interface MosaicPayload {
     blurBackend: string;
     matchBackend: string;
     detectBackend: string;
+    warpBackend: string;
     pixels: ArrayBuffer;
     fillPercent: number;
     spanHorizontal: number;

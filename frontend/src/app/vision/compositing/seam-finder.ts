@@ -65,78 +65,85 @@ export class SeamFinder {
     cut(mosaic: Mosaic, tile: WarpTile, reference: Mosaic | null = null): SeamStats {
         const params = this.params;
         const stats: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
-        const n = tile.width * tile.height;
+        const step = this.step(tile);
+        const width = Math.max(1, Math.ceil(tile.width / step));
+        const height = Math.max(1, Math.ceil(tile.height / step));
+        const cells = width * height;
         const existing = new Float32Array(3);
-        const overlap = new Uint8Array(n);
-        const difference = new Float32Array(n);
-        for (let y = 0; y < tile.height; y++) {
-            const cv = tile.v0 + y;
-            if (cv < 0 || cv >= mosaic.height) continue;
-            for (let x = 0; x < tile.width; x++) {
-                const t = y * tile.width + x;
-                if (tile.mask[t] <= 0) continue;
-                const cu = (((tile.u0 + x) % mosaic.width) + mosaic.width) % mosaic.width;
-                const index = cv * mosaic.width + cu;
+        const overlap = new Uint8Array(cells);
+        const difference = new Float32Array(cells);
+        const present = new Uint8Array(cells);
+        for (let y = 0; y < height; y++) {
+            const sy = Math.min(tile.height - 1, y * step + (step >> 1));
+            for (let x = 0; x < width; x++) {
+                const sx = Math.min(tile.width - 1, x * step + (step >> 1));
+                const source = sy * tile.width + sx;
+                const cell = y * width + x;
+                if (tile.mask[source] <= 0) continue;
+                present[cell] = 1;
+                const index = mosaic.indexAt(tile.u0 + sx, tile.v0 + sy);
+                if (index < 0) continue;
                 if (
                     !mosaic.meanColorAt(index, existing) &&
                     !reference?.meanColorAt(index, existing)
                 ) {
                     continue;
                 }
-                overlap[t] = 1;
-                stats.overlapPixels++;
+                overlap[cell] = 1;
+                stats.overlapPixels += step * step;
                 const d =
-                    Math.abs(existing[0] - tile.color[t * 3]) +
-                    Math.abs(existing[1] - tile.color[t * 3 + 1]) +
-                    Math.abs(existing[2] - tile.color[t * 3 + 2]);
-                difference[t] = d / 3;
-                if (d / 3 > params.deghostThreshold) stats.inconsistentPixels++;
+                    (Math.abs(existing[0] - tile.color[source * 3]) +
+                        Math.abs(existing[1] - tile.color[source * 3 + 1]) +
+                        Math.abs(existing[2] - tile.color[source * 3 + 2])) /
+                    3;
+                difference[cell] = d;
+                if (d > params.deghostThreshold) stats.inconsistentPixels += step * step;
             }
         }
         if (stats.overlapPixels === 0) return stats;
         if (!params.seam) {
             if (params.deghost) {
-                for (let t = 0; t < n; t++) {
-                    if (overlap[t] && difference[t] > params.deghostThreshold) tile.mask[t] = 0;
-                }
+                this.applyCells(tile, step, width, height, (cell) =>
+                    overlap[cell] && difference[cell] > params.deghostThreshold ? 0 : -1,
+                );
             }
             return stats;
         }
-        const cost = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
-        const label = new Int8Array(n).fill(-1);
+        const cost = new Float64Array(cells).fill(Number.POSITIVE_INFINITY);
+        const label = new Int8Array(cells).fill(-1);
         const heap = new MinHeap();
-        for (let y = 0; y < tile.height; y++) {
-            const cv = tile.v0 + y;
-            for (let x = 0; x < tile.width; x++) {
-                const t = y * tile.width + x;
-                const inNew = tile.mask[t] > 0;
-                if (overlap[t]) continue;
-                if (inNew) {
-                    cost[t] = 0;
-                    label[t] = 1;
-                    heap.push({ cost: 0, index: t, label: 1 });
-                } else if (cv >= 0 && cv < mosaic.height) {
-                    const cu = (((tile.u0 + x) % mosaic.width) + mosaic.width) % mosaic.width;
-                    const index = cv * mosaic.width + cu;
-                    if (mosaic.hasCoverage(index) || reference?.hasCoverage(index)) {
-                        cost[t] = 0;
-                        label[t] = 0;
-                        heap.push({ cost: 0, index: t, label: 0 });
-                    }
+        for (let y = 0; y < height; y++) {
+            const sy = Math.min(tile.height - 1, y * step + (step >> 1));
+            for (let x = 0; x < width; x++) {
+                const cell = y * width + x;
+                if (overlap[cell]) continue;
+                if (present[cell]) {
+                    cost[cell] = 0;
+                    label[cell] = 1;
+                    heap.push({ cost: 0, index: cell, label: 1 });
+                    continue;
+                }
+                const sx = Math.min(tile.width - 1, x * step + (step >> 1));
+                const index = mosaic.indexAt(tile.u0 + sx, tile.v0 + sy);
+                if (index < 0) continue;
+                if (mosaic.hasCoverage(index) || reference?.hasCoverage(index)) {
+                    cost[cell] = 0;
+                    label[cell] = 0;
+                    heap.push({ cost: 0, index: cell, label: 0 });
                 }
             }
         }
-        const neighbours = [-1, 1, -tile.width, tile.width];
+        const neighbours = [-1, 1, -width, width];
         while (heap.size > 0) {
             const entry = heap.pop();
             if (!entry) break;
             if (entry.cost > cost[entry.index] + 1e-9) continue;
-            const x = entry.index % tile.width;
-            for (const step of neighbours) {
-                const next = entry.index + step;
-                if (next < 0 || next >= n) continue;
-                if (step === -1 && x === 0) continue;
-                if (step === 1 && x === tile.width - 1) continue;
+            const x = entry.index % width;
+            for (const offset of neighbours) {
+                const next = entry.index + offset;
+                if (next < 0 || next >= cells) continue;
+                if (offset === -1 && x === 0) continue;
+                if (offset === 1 && x === width - 1) continue;
                 if (!overlap[next]) continue;
                 const stepCost = 1 + difference[next] * difference[next];
                 const candidate = entry.cost + stepCost;
@@ -147,17 +154,39 @@ export class SeamFinder {
                 }
             }
         }
-        const ramp = Math.max(1, params.featherWidth / 6);
-        for (let t = 0; t < n; t++) {
-            if (!overlap[t]) continue;
-            if (label[t] === 0) {
-                tile.mask[t] = 0;
-            } else if (label[t] === 1) {
-                tile.mask[t] = Math.max(tile.mask[t], Math.min(1, (cost[t] + 1) / ramp));
-            } else if (params.deghost && difference[t] > params.deghostThreshold) {
-                tile.mask[t] = 0;
+        const ramp = Math.max(1, params.featherWidth / 6 / step);
+        this.applyCells(tile, step, width, height, (cell, current) => {
+            if (!overlap[cell]) return -1;
+            if (label[cell] === 0) return 0;
+            if (label[cell] === 1) return Math.max(current, Math.min(1, (cost[cell] + 1) / ramp));
+            return params.deghost && difference[cell] > params.deghostThreshold ? 0 : -1;
+        });
+        return stats;
+    }
+
+    private step(tile: WarpTile): number {
+        const budget = this.params.seamMegapixels;
+        if (budget <= 0) return 1;
+        const area = tile.width * tile.height;
+        if (area <= budget * 1e6) return 1;
+        return Math.max(1, Math.round(Math.sqrt(area / (budget * 1e6))));
+    }
+
+    private applyCells(
+        tile: WarpTile,
+        step: number,
+        width: number,
+        height: number,
+        value: (cell: number, current: number) => number,
+    ): void {
+        for (let y = 0; y < tile.height; y++) {
+            const cellRow = Math.min(height - 1, (y / step) | 0) * width;
+            for (let x = 0; x < tile.width; x++) {
+                const index = y * tile.width + x;
+                if (tile.mask[index] <= 0) continue;
+                const next = value(cellRow + Math.min(width - 1, (x / step) | 0), tile.mask[index]);
+                if (next >= 0) tile.mask[index] = next;
             }
         }
-        return stats;
     }
 }

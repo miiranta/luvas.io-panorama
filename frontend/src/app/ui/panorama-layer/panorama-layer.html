@@ -7,9 +7,11 @@
                 type="button"
                 class="round-action save"
                 [class.working]="saving()"
-                [disabled]="saving()"
+                [disabled]="!canExport()"
                 (click)="save($event)"
-                title="Export PNG"
+                [title]="
+                    canExport() ? 'Export PNG' : 'Compositing — export available when finished'
+                "
             >
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                     <path
@@ -55,6 +57,15 @@
                 </button>
             }
         </div>
+
+        <span class="badge" [class.busy]="composing()">
+            @if (composing()) {
+                <i class="spinner" aria-hidden="true"></i>
+                compositing
+            } @else {
+                preview
+            }
+        </span>
 
         @if (expanded()) {
             <span class="meta">{{ size() }}</span>

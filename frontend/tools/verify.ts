@@ -103,7 +103,7 @@ async function runScenario(
         mosaic !== null && mosaic.spanHorizontal > 5,
         mosaic
             ? `${mosaic.spanHorizontal.toFixed(1)}°×${mosaic.spanVertical.toFixed(1)}°, ` +
-                  `${mosaic.width}×${mosaic.height}, ${mosaic.fillPercent.toFixed(1)}% preenchido`
+                  `${mosaic.width}×${mosaic.height}, ${mosaic.fillPercent.toFixed(1)}% filled`
             : 'no mosaic',
     );
     check(
@@ -128,6 +128,40 @@ async function runScenario(
         `worst offset ${worstYaw.toFixed(2)}° (ground truth ${yaws.join('/')})`,
     );
 
+    await pipeline.settle();
+    const settledGraph = pipeline.graph();
+    const settledErrors: number[] = [];
+    const settledBase = settledGraph.nodes.find((n) => n.label === '#1');
+    for (let i = 1; i < yaws.length; i++) {
+        const node = settledGraph.nodes.find((n) => n.label === `#${i + 1}`);
+        if (!node || !settledBase || node.rejected) continue;
+        settledErrors.push(
+            Math.abs(Math.abs(node.yaw - settledBase.yaw) - Math.abs(yaws[i] - yaws[0])),
+        );
+    }
+    const settledWorst =
+        settledErrors.length > 0 ? Math.max(...settledErrors) : Number.POSITIVE_INFINITY;
+    check(
+        `${title}: global refinement keeps the alignment`,
+        settledWorst <= Math.max(worstYaw, 0.2) + 0.05,
+        `worst offset ${settledWorst.toFixed(2)}° after refining (was ${worstYaw.toFixed(2)}°)`,
+    );
+
+    const exported = await pipeline.exportImage();
+    const exportedPixels = exported ? (exported.width * exported.height) / 1e6 : 0;
+    check(
+        `${title}: export sampled above the preview canvas`,
+        exported !== null && mosaic !== null && exported.width > mosaic.width,
+        exported
+            ? `${exported.width}×${exported.height} vs preview ${mosaic?.width}×${mosaic?.height}`
+            : 'no export',
+    );
+    check(
+        `${title}: export within the megapixel cap`,
+        exported !== null && exportedPixels <= params.compose.exportMegapixels + 0.05,
+        `${exportedPixels.toFixed(2)} MP (cap ${params.compose.exportMegapixels} MP)`,
+    );
+
     if (options.moving) {
         const ghosts = reports
             .filter((r) => r.accepted && r.overlapPixels > 0)
@@ -141,7 +175,7 @@ async function runScenario(
 }
 
 function runUnitChecks(): void {
-    console.log('\n=== unidades ===');
+    console.log('\n=== units ===');
     const focal = 900;
     const rotation = mat3Multiply(
         rotationFromAxisAngle(deg(4), 0, 0),

@@ -1,11 +1,11 @@
 import { ModelParams } from '../../core/models/params';
-import { Mat3 } from '../math/matrix3';
+import { Mat3, mat3Inverse } from '../math/matrix3';
 import {
     Correspondence,
     MIN_PAIRS,
     fitModel,
     isPlausibleHomography,
-    transferError,
+    symmetricTransferError,
 } from './transform-model';
 
 export interface ModelFit {
@@ -50,9 +50,10 @@ export class RansacEstimator {
             if (!model || !isPlausibleHomography(model, kind, params.rejectSkew)) continue;
             let count = 0;
             let error = 0;
+            const modelInverse = mat3Inverse(model);
             const inliers = new Uint8Array(points.length);
             for (let i = 0; i < points.length; i++) {
-                const e = transferError(model, points[i]);
+                const e = symmetricTransferError(model, modelInverse, points[i]);
                 if (e <= threshold) {
                     inliers[i] = 1;
                     count++;
@@ -91,10 +92,11 @@ export class RansacEstimator {
             for (let i = 0; i < inliers.length; i++) if (inliers[i]) inlierIndices.push(i);
             const refined = fitModel(kind, points, inlierIndices);
             if (refined && isPlausibleHomography(refined, kind, params.rejectSkew)) {
+                const refinedInverse = mat3Inverse(refined);
                 const nextInliers = new Uint8Array(points.length);
                 let nextCount = 0;
                 for (let i = 0; i < points.length; i++) {
-                    if (transferError(refined, points[i]) <= threshold) {
+                    if (symmetricTransferError(refined, refinedInverse, points[i]) <= threshold) {
                         nextInliers[i] = 1;
                         nextCount++;
                     }
@@ -107,8 +109,9 @@ export class RansacEstimator {
             }
         }
         let errorSum = 0;
+        const finalInverse = mat3Inverse(matrix);
         for (let i = 0; i < points.length; i++)
-            if (inliers[i]) errorSum += transferError(matrix, points[i]);
+            if (inliers[i]) errorSum += symmetricTransferError(matrix, finalInverse, points[i]);
         return {
             matrix,
             inliers,

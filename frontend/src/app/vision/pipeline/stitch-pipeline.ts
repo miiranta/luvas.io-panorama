@@ -19,7 +19,7 @@ import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
 import { LiveTracker } from './live-tracker';
-import { MosaicCompositor, RasterImage } from './mosaic-compositor';
+import { MosaicCompositor, ProgressReporter, RasterImage } from './mosaic-compositor';
 import { PairLink } from './pair-link';
 import { PairLinker, isFitted } from './pair-linker';
 
@@ -39,6 +39,8 @@ export interface FrameOutcome {
 
 export class StitchPipeline {
     private params: PipelineParams = DEFAULT_PARAMS;
+    private globalBundlePending = false;
+    private reporter: ProgressReporter = () => undefined;
     private readonly frames = new KeyframeStore();
     private readonly links = new LinkRegistry();
     private readonly accelerators = new AcceleratorSuite(() => this.params);
@@ -54,9 +56,11 @@ export class StitchPipeline {
     private readonly compositor = new MosaicCompositor(
         () => this.params,
         () => this.accelerators.blur(),
+        () => this.accelerators.warper(),
         this.frames,
         this.links,
         this.cameras,
+        (stage, progress) => this.reporter(stage, progress),
     );
     private readonly tracker = new LiveTracker(this.frames, this.features, this.linker);
 
@@ -64,11 +68,16 @@ export class StitchPipeline {
         this.params = params;
     }
 
+    setReporter(reporter: ProgressReporter): void {
+        this.reporter = reporter;
+    }
+
     get frameCount(): number {
         return this.frames.active.length;
     }
 
     reset(): void {
+        this.globalBundlePending = false;
         this.frames.clear();
         this.links.clear();
         this.cameras.reset();
@@ -81,6 +90,27 @@ export class StitchPipeline {
 
     recompose(): Promise<void> {
         return this.compositor.recompose();
+    }
+
+    needsSettle(): boolean {
+        return this.compositor.needsSettle() || this.globalBundlePending;
+    }
+
+    async settle(): Promise<boolean> {
+        if (this.globalBundlePending) {
+            const active = this.frames.active;
+            if (active.length > 2) {
+                this.cameras.adjust(
+                    active,
+                    this.links,
+                    active.map((frame) => frame.id),
+                );
+            }
+            this.globalBundlePending = false;
+        }
+        if (!this.compositor.needsSettle()) return false;
+        await this.compositor.recompose();
+        return true;
     }
 
     async addFrame(label: string, work: ColorImage, compose: ColorImage): Promise<FrameOutcome> {
@@ -158,6 +188,7 @@ export class StitchPipeline {
             return finish(connection);
         }
 
+        this.globalBundlePending = true;
         const adjusting = performance.now();
         const bundle = this.cameras.adjust(
             this.frames.active,
@@ -256,8 +287,11 @@ export class StitchPipeline {
         };
     }
 
-    exportImage(): RasterImage | null {
-        return this.compositor.render(this.params.compose.crop);
+    async exportImage(): Promise<RasterImage | null> {
+        return this.compositor.renderExport(
+            this.params.compose.exportScale,
+            this.params.compose.exportMegapixels,
+        );
     }
 
     private linkToNeighbours(

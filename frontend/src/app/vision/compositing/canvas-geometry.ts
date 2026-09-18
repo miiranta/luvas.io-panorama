@@ -25,12 +25,23 @@ function canvasHeightFor(surface: SurfaceKind, width: number): number {
     return Math.round((width * 3) / 4);
 }
 
+export const PYRAMID_ALIGNMENT = 64;
+
+export function alignUp(value: number): number {
+    return Math.ceil(value / PYRAMID_ALIGNMENT) * PYRAMID_ALIGNMENT;
+}
+
+export function alignDown(value: number): number {
+    return Math.floor(value / PYRAMID_ALIGNMENT) * PYRAMID_ALIGNMENT;
+}
+
 export function createCanvasGeometry(
     surface: SurfaceKind,
-    width: number,
+    requestedWidth: number,
     focal: number,
     orientation: Mat3 = mat3Identity(),
 ): CanvasGeometry {
+    const width = alignUp(Math.max(PYRAMID_ALIGNMENT, requestedWidth));
     const height = canvasHeightFor(surface, width);
     return {
         surface,
@@ -204,6 +215,59 @@ export function computeFootprint(
         v1: Math.ceil(v1),
         valid,
     };
+}
+
+export interface FootprintRequest {
+    rotation: Mat3;
+    width: number;
+    height: number;
+    focal: number;
+}
+
+export function unionFootprints(
+    geometry: CanvasGeometry,
+    frames: readonly FootprintRequest[],
+): CanvasBox | null {
+    const boxes = frames
+        .map((frame) =>
+            computeFootprint(geometry, frame.rotation, frame.width, frame.height, frame.focal),
+        )
+        .filter((footprint) => footprint.valid);
+    if (boxes.length === 0) return null;
+    const wraps = geometry.surface !== 'planar';
+    let u0 = boxes[0].u0;
+    let u1 = boxes[0].u1;
+    let v0 = boxes[0].v0;
+    let v1 = boxes[0].v1;
+    for (const box of boxes.slice(1)) {
+        let low = box.u0;
+        let high = box.u1;
+        if (wraps) {
+            const centre = (u0 + u1) / 2;
+            while ((low + high) / 2 - centre > geometry.width / 2) {
+                low -= geometry.width;
+                high -= geometry.width;
+            }
+            while (centre - (low + high) / 2 > geometry.width / 2) {
+                low += geometry.width;
+                high += geometry.width;
+            }
+        }
+        u0 = Math.min(u0, low);
+        u1 = Math.max(u1, high);
+        v0 = Math.min(v0, box.v0);
+        v1 = Math.max(v1, box.v1);
+    }
+    if (!wraps) {
+        u0 = Math.max(0, u0);
+        u1 = Math.min(geometry.width - 1, u1);
+    } else if (u1 - u0 + 1 > geometry.width) {
+        u0 = 0;
+        u1 = geometry.width - 1;
+    }
+    v0 = Math.max(0, v0);
+    v1 = Math.min(geometry.height - 1, v1);
+    return u1 > u0 && v1 > v0 ? { u0, v0, u1, v1 } : null;
 }
 
 export function angularSpan(

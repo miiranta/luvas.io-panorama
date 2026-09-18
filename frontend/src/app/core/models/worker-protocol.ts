@@ -13,6 +13,13 @@ export interface RasterPayload {
     pixels: ArrayBuffer;
 }
 
+export interface PipelineState {
+    busy: boolean;
+    stage: string;
+    progress: number;
+    stale: boolean;
+}
+
 export type WorkerRequest =
     | { kind: 'params'; params: PipelineParams }
     | {
@@ -38,5 +45,6 @@ export type WorkerResponse =
     | { kind: 'graph'; graph: GraphPayload }
     | { kind: 'preview'; epoch: number; preview: PreviewPayload | null }
     | ({ kind: 'export' } & RasterPayload)
+    | { kind: 'state'; state: PipelineState }
     | { kind: 'progress'; detail: string }
     | { kind: 'error'; message: string };

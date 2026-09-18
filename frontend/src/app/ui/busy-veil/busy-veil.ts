@@ -11,6 +11,13 @@ import { StitcherService } from '../../core/services/stitcher.service';
 export class BusyVeil {
     private readonly stitcher = inject(StitcherService);
 
-    readonly visible = computed(() => this.stitcher.busy() || !this.stitcher.ready());
-    readonly label = computed(() => (this.stitcher.ready() ? this.stitcher.status() : 'starting'));
+    readonly visible = computed(
+        () => this.stitcher.busy() || this.stitcher.composing() || !this.stitcher.ready(),
+    );
+    readonly label = computed(() => {
+        if (!this.stitcher.ready()) return 'starting';
+        const progress = this.stitcher.progress();
+        const status = this.stitcher.status();
+        return progress >= 0 && progress < 1 ? `${status} ${Math.round(progress * 100)}%` : status;
+    });
 }

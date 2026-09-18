@@ -170,6 +170,38 @@ try {
         await wait(2200);
     }
 
+    const exportGate = await evaluate(`
+    (async () => {
+      const shutter = document.querySelector('app-camera-stage button.shutter');
+      if (shutter && !shutter.disabled) shutter.click();
+      let blocked = false;
+      let badge = '';
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        const save = document.querySelector('app-panorama-layer button.save');
+        const label = document.querySelector('app-panorama-layer .badge');
+        if (save?.disabled) {
+          blocked = true;
+          badge = label?.textContent?.trim() ?? '';
+          break;
+        }
+      }
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        const save = document.querySelector('app-panorama-layer button.save');
+        if (save && !save.disabled) {
+          return { blocked, badge, released: true };
+        }
+      }
+      return { blocked, badge, released: false };
+    })()
+  `);
+    check(
+        'export waits for the composition and says it is a preview',
+        exportGate.blocked && exportGate.released && /compositing/i.test(exportGate.badge),
+        `blocked while "${exportGate.badge}", released afterwards=${exportGate.released}`,
+    );
+
     const hud = await evaluate(`
     (() => {
       const chips = [...document.querySelectorAll('app-camera-stage .chip')].map((c) =>
@@ -350,6 +382,33 @@ try {
     await evaluate(`document.querySelector('app-insights-sheet .backdrop').click()`);
     await wait(400);
 
+    const download = await evaluate(`
+    (async () => {
+      const original = URL.createObjectURL;
+      let size = 0;
+      let type = '';
+      URL.createObjectURL = (blob) => {
+        size = blob.size;
+        type = blob.type;
+        return original.call(URL, blob);
+      };
+      const canvas = document.querySelector('app-panorama-layer canvas');
+      const preview = canvas ? canvas.width + 'x' + canvas.height : 'none';
+      document.querySelector('app-panorama-layer button.save')?.click();
+      for (let i = 0; i < 300; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (size > 0) break;
+      }
+      URL.createObjectURL = original;
+      return { size, type, preview };
+    })()
+  `);
+    check(
+        'export writes a full-resolution PNG',
+        download.size > 50000 && download.type === 'image/png',
+        `${(download.size / 1024).toFixed(0)} kB ${download.type || 'no blob'} (preview canvas ${download.preview})`,
+    );
+
     const resetFlow = await evaluate(`
     (async () => {
       const button = document.querySelector('app-camera-stage button.reset');
@@ -523,23 +582,29 @@ try {
         mixer: rows.find((row) => row.startsWith('blending')) ?? null,
         matcher: rows.find((row) => row.startsWith('matching')) ?? null,
         detector: rows.find((row) => row.startsWith('detection')) ?? null,
+        warper: rows.find((row) => row.startsWith('warping')) ?? null,
       };
     })()
   `);
     check(
         'multiband blending accelerated by WebGL2',
-        gpuState?.mixer != null && /webgl2/.test(gpuState.mixer),
+        gpuState?.mixer != null && gpuState.mixer.startsWith('blendingwebgl2'),
         gpuState?.mixer ?? 'missing',
     );
     check(
         'matching accelerated by WebGL2 (bit-identical to the CPU)',
-        gpuState?.matcher != null && /webgl2/.test(gpuState.matcher),
+        gpuState?.matcher != null && gpuState.matcher.startsWith('matchingwebgl2'),
         gpuState?.matcher ?? 'missing',
     );
     check(
         'detection accelerated by WebGL2 (response checked against the CPU)',
-        gpuState?.detector != null && /webgl2/.test(gpuState.detector),
+        gpuState?.detector != null && gpuState.detector.startsWith('detectionwebgl2'),
         gpuState?.detector ?? 'missing',
+    );
+    check(
+        'warping accelerated by WebGL2 (tiles checked against the CPU)',
+        gpuState?.warper != null && gpuState.warper.startsWith('warpingwebgl2'),
+        gpuState?.warper ?? 'missing',
     );
 
     const surfaceSwap = await evaluate(`
