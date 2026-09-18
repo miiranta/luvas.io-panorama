@@ -16,6 +16,8 @@ export interface DetectParams {
     fastThreshold: number;
     fastArc: number;
     subPixel: boolean;
+    scaleLevels: number;
+    scaleFactor: number;
 }
 
 export interface MatchParams {
@@ -87,6 +89,8 @@ export const DEFAULT_PARAMS: PipelineParams = {
         fastThreshold: 20,
         fastArc: 12,
         subPixel: true,
+        scaleLevels: 3,
+        scaleFactor: 1.5,
     },
     match: {
         descriptorPatch: 31,
@@ -127,7 +131,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
         vignetting: true,
         composeWidth: 1600,
         exportScale: 1,
-        exportMegapixels: 8,
+        exportMegapixels: 120,
         crop: true,
         gpu: true,
     },

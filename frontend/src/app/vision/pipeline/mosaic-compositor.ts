@@ -13,6 +13,7 @@ import {
 import { ExposureCompensator } from '../compositing/exposure';
 import { levelHorizon } from '../compositing/horizon';
 import { Mosaic } from '../compositing/mosaic';
+import { MosaicFactory, MosaicSurface } from '../compositing/mosaic-surface';
 import { VignettingSample, estimateVignetting, vignetteAt } from '../compositing/vignetting';
 import { ColorImage } from '../imaging/image';
 import { SeamFinder, SeamStats } from '../compositing/seam-finder';
@@ -23,6 +24,7 @@ import { CameraSolver } from './camera-solver';
 import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
+import { EXPORT_TILE, ExportedImage, PanoramaExporter } from './panorama-exporter';
 import { PairLink } from './pair-link';
 
 const STABLE_DEGREES = 0.2;
@@ -47,8 +49,8 @@ export interface RasterImage {
 export type ProgressReporter = (stage: string, progress: number) => void;
 
 export class MosaicCompositor {
-    private committed: Mosaic | null = null;
-    private preview: Mosaic | null = null;
+    private committed: MosaicSurface | null = null;
+    private preview: MosaicSurface | null = null;
     private canvas: CanvasGeometry | null = null;
     private committedGeometry: CanvasGeometry | null = null;
     private committedDistortion = 0;
@@ -67,6 +69,8 @@ export class MosaicCompositor {
         private readonly links: LinkRegistry,
         private readonly cameras: CameraSolver,
         private readonly report: ProgressReporter = () => undefined,
+        private readonly createMosaic: MosaicFactory = (width, height, bands, view) =>
+            new Mosaic(width, height, bands, view),
     ) {}
 
     get isEmpty(): boolean {
@@ -86,6 +90,8 @@ export class MosaicCompositor {
     }
 
     reset(): void {
+        this.committed?.dispose();
+        this.preview?.dispose();
         this.committed = null;
         this.preview = null;
         this.canvas = null;
@@ -98,7 +104,17 @@ export class MosaicCompositor {
 
     async recompose(): Promise<void> {
         const geometry = this.prepareCanvas();
-        const mosaic = new Mosaic(geometry.width, geometry.height, this.params().compose.bands);
+        const bands = this.params().compose.bands;
+        const previous = this.committed;
+        const reusable =
+            previous !== null &&
+            previous.width === geometry.width &&
+            previous.height === geometry.height &&
+            previous.bands === bands;
+        if (reusable) previous.reset();
+        const mosaic = reusable
+            ? previous
+            : this.createMosaic(geometry.width, geometry.height, bands);
         const live = new Set(this.liveIds());
         this.stats.clear();
         for (const frame of this.frames.all) frame.uncommit();
@@ -109,7 +125,7 @@ export class MosaicCompositor {
             await this.commit(frame, geometry, mosaic);
             done++;
         }
-        this.preview = null;
+        if (this.committed !== mosaic) this.committed?.dispose();
         this.committed = mosaic;
         this.rememberCommitted(geometry);
         await this.rebuildPreview(geometry);
@@ -138,16 +154,8 @@ export class MosaicCompositor {
         const mosaic = this.committed;
         const box = mosaic?.boundingBox(this.preview);
         if (!mosaic || !box) return 0;
-        let covered = 0;
-        let total = 0;
-        for (let v = box.v0; v <= box.v1; v++) {
-            for (let u = box.u0; u <= box.u1; u++) {
-                const index = v * mosaic.width + u;
-                total++;
-                if (mosaic.coverage[index] || this.preview?.coverage[index]) covered++;
-            }
-        }
-        return total === 0 ? 0 : (covered / total) * 100;
+        const total = (box.u1 - box.u0 + 1) * (box.v1 - box.v0 + 1);
+        return total === 0 ? 0 : (mosaic.coveredCount(box, this.preview) / total) * 100;
     }
 
     span(): { horizontal: number; vertical: number } {
@@ -172,102 +180,26 @@ export class MosaicCompositor {
         return { width: image.width, height: image.height, pixels: image.data.buffer };
     }
 
-    async renderExport(scale: number, megapixelBudget: number): Promise<RasterImage | null> {
+    async renderExport(
+        scale: number,
+        megapixelCap: number,
+        tileSize = EXPORT_TILE,
+    ): Promise<ExportedImage | null> {
         const frames = this.orderedFrames();
         if (frames.length === 0) return null;
-        this.report('preparing export', 0);
-        const sources = new Map<number, ColorImage>();
-        for (const frame of frames) {
-            const source = await frame.composeImage();
-            if (source) sources.set(frame.id, source);
-        }
-        if (sources.size === 0) return null;
-        const params = this.params();
-        const reference = frames.find((frame) => sources.has(frame.id)) as Keyframe;
-        const referenceSource = sources.get(reference.id) as ColorImage;
-        const nativeFocal =
-            this.cameras.focalFor(reference) * (referenceSource.width / reference.workWidth);
-        const orientation =
-            this.canvas?.orientation ?? createCanvasGeometry('planar', 16, 1).orientation;
-        let geometry = this.exportGeometry(
-            params.compose.surface,
-            nativeFocal * scale,
-            orientation,
-        );
-        let box = this.exportBox(geometry, frames, sources);
-        if (!box) return null;
-        const megapixels = ((box.u1 - box.u0 + 1) * (box.v1 - box.v0 + 1)) / 1e6;
-        if (megapixels > megapixelBudget) {
-            const shrink = Math.sqrt(megapixelBudget / megapixels);
-            geometry = this.exportGeometry(
-                params.compose.surface,
-                nativeFocal * scale * shrink,
-                orientation,
-            );
-            box = this.exportBox(geometry, frames, sources);
-            if (!box) return null;
-        }
-        const width = box.u1 - box.u0 + 1;
-        const height = box.v1 - box.v0 + 1;
-        const mosaic = new Mosaic(width, height, params.compose.bands, {
-            u0: ((box.u0 % geometry.width) + geometry.width) % geometry.width,
-            v0: box.v0,
-            canvasWidth: geometry.width,
+        const exporter = new PanoramaExporter({
+            params: this.params,
+            blur: this.blur,
+            warp: this.warpBackend,
+            createMosaic: this.createMosaic,
+            focalFor: (frame) => this.cameras.focalFor(frame),
+            distortion: () => this.cameras.distortion,
+            vignetting: () => this.vignetting,
+            orientation: () =>
+                this.canvas?.orientation ?? createCanvasGeometry('planar', 64, 1).orientation,
+            report: this.report,
         });
-        let done = 0;
-        for (const frame of frames) {
-            const source = sources.get(frame.id);
-            if (source) {
-                this.report('rendering export', done / frames.length);
-                await this.drawSource(frame, source, geometry, mosaic, null);
-            }
-            done++;
-        }
-        this.report('rendering export', 1);
-        const image = mosaic.render(params.compose.blend === 'multiband', null);
-        return { width: image.width, height: image.height, pixels: image.data.buffer };
-    }
-
-    private exportGeometry(
-        surface: PipelineParams['compose']['surface'],
-        focal: number,
-        orientation: CanvasGeometry['orientation'],
-    ): CanvasGeometry {
-        const width =
-            surface === 'planar'
-                ? Math.round(focal * 2.4)
-                : Math.round(Math.PI * 2 * Math.max(1, focal));
-        return createCanvasGeometry(surface, Math.max(64, width), focal, orientation);
-    }
-
-    private exportBox(
-        geometry: CanvasGeometry,
-        frames: readonly Keyframe[],
-        sources: ReadonlyMap<number, ColorImage>,
-    ): CanvasBox | null {
-        const requests = frames.flatMap((frame) => {
-            const source = sources.get(frame.id);
-            if (!source) return [];
-            return [
-                {
-                    rotation: frame.rotation,
-                    width: source.width,
-                    height: source.height,
-                    focal: this.cameras.focalFor(frame) * (source.width / frame.workWidth),
-                    distortion: this.cameras.distortion,
-                },
-            ];
-        });
-        const box = unionFootprints(geometry, requests);
-        if (!box) return null;
-        const u0 = alignDown(box.u0 - EXPORT_MARGIN);
-        const v0 = Math.max(0, alignDown(box.v0 - EXPORT_MARGIN));
-        return {
-            u0,
-            v0,
-            u1: alignUp(box.u1 + EXPORT_MARGIN + 1) - 1,
-            v1: Math.min(geometry.height - 1, alignUp(box.v1 + EXPORT_MARGIN + 1) - 1),
-        };
+        return exporter.render(frames, scale, megapixelCap, tileSize);
     }
 
     private prepareCanvas(): CanvasGeometry {
@@ -444,9 +376,10 @@ export class MosaicCompositor {
             this.preview?.width === geometry.width &&
             this.preview.height === geometry.height &&
             this.preview.bands === bands;
+        if (!reusable) this.preview?.dispose();
         const preview = reusable
-            ? (this.preview as Mosaic)
-            : new Mosaic(geometry.width, geometry.height, bands);
+            ? (this.preview as MosaicSurface)
+            : this.createMosaic(geometry.width, geometry.height, bands);
         preview.reset();
         for (const frame of this.orderedFrames()) {
             if (!live.has(frame.id)) continue;
@@ -455,7 +388,11 @@ export class MosaicCompositor {
         this.preview = preview;
     }
 
-    private async commit(frame: Keyframe, geometry: CanvasGeometry, mosaic: Mosaic): Promise<void> {
+    private async commit(
+        frame: Keyframe,
+        geometry: CanvasGeometry,
+        mosaic: MosaicSurface,
+    ): Promise<void> {
         this.stats.set(frame.id, await this.draw(frame, geometry, mosaic, null));
         frame.commit();
     }
@@ -463,8 +400,8 @@ export class MosaicCompositor {
     private async draw(
         frame: Keyframe,
         geometry: CanvasGeometry,
-        mosaic: Mosaic,
-        reference: Mosaic | null,
+        mosaic: MosaicSurface,
+        reference: MosaicSurface | null,
     ): Promise<SeamStats> {
         const source = await frame.composeImage();
         if (!source) return NO_STATS;
@@ -475,8 +412,8 @@ export class MosaicCompositor {
         frame: Keyframe,
         source: ColorImage,
         geometry: CanvasGeometry,
-        mosaic: Mosaic,
-        reference: Mosaic | null,
+        mosaic: MosaicSurface,
+        reference: MosaicSurface | null,
     ): Promise<SeamStats> {
         const params = this.params().compose;
         const focal = this.cameras.focalFor(frame) * (source.width / frame.workWidth);

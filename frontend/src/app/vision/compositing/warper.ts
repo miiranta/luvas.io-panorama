@@ -2,7 +2,14 @@ import { ComposeParams } from '../../core/models/params';
 import { WarpBackend, cpuWarpBackend } from '../acceleration/warp-backend';
 import { ColorImage } from '../imaging/image';
 import { Mat3 } from '../math/matrix3';
-import { CanvasGeometry, alignDown, alignUp, computeFootprint } from './canvas-geometry';
+import {
+    CanvasBox,
+    CanvasGeometry,
+    alignDown,
+    alignUp,
+    clipFootprint,
+    computeFootprint,
+} from './canvas-geometry';
 import { WarpTile } from './warp-tile';
 
 export class Warper {
@@ -19,6 +26,7 @@ export class Warper {
         gain: number,
         distortion = 0,
         vignetting = 0,
+        clip: CanvasBox | null = null,
     ): WarpTile | null {
         const { geometry, params } = this;
         const footprint = computeFootprint(
@@ -33,14 +41,18 @@ export class Warper {
         const pad = params.blend === 'multiband' ? Math.ceil(params.featherWidth / 2) + 4 : 2;
         const wraps = geometry.surface !== 'planar';
         const aligned = params.blend === 'multiband';
-        const rawU0 = wraps ? footprint.u0 - pad : Math.max(0, footprint.u0 - pad);
-        const rawU1 = wraps ? footprint.u1 + pad : Math.min(geometry.width - 1, footprint.u1 + pad);
-        const rawV0 = Math.max(0, footprint.v0 - pad);
-        const rawV1 = Math.min(geometry.height - 1, footprint.v1 + pad);
-        const u0 = aligned ? alignDown(rawU0) : rawU0;
-        const v0 = aligned ? Math.max(0, alignDown(rawV0)) : rawV0;
-        const u1 = aligned ? alignUp(rawU1 + 1) - 1 : rawU1;
-        const v1 = aligned ? Math.min(geometry.height - 1, alignUp(rawV1 + 1) - 1) : rawV1;
+        const padded = {
+            u0: wraps ? footprint.u0 - pad : Math.max(0, footprint.u0 - pad),
+            u1: wraps ? footprint.u1 + pad : Math.min(geometry.width - 1, footprint.u1 + pad),
+            v0: Math.max(0, footprint.v0 - pad),
+            v1: Math.min(geometry.height - 1, footprint.v1 + pad),
+        };
+        const bounds = clip ? clipFootprint(geometry, padded, clip) : padded;
+        if (!bounds) return null;
+        const u0 = aligned ? alignDown(bounds.u0) : bounds.u0;
+        const v0 = aligned ? Math.max(0, alignDown(bounds.v0)) : bounds.v0;
+        const u1 = aligned ? alignUp(bounds.u1 + 1) - 1 : bounds.u1;
+        const v1 = aligned ? Math.min(geometry.height - 1, alignUp(bounds.v1 + 1) - 1) : bounds.v1;
         const width = u1 - u0 + 1;
         const height = v1 - v0 + 1;
         if (width <= 0 || height <= 0 || width > geometry.width * 1.2) return null;

@@ -1,3 +1,4 @@
+import { inflateSync } from 'node:zlib';
 import { DEFAULT_PARAMS, PipelineParams } from '../src/app/core/models/params';
 import { StitchPipeline } from '../src/app/vision/pipeline/stitch-pipeline';
 import { Mat3, mat3Multiply, mat3Transpose } from '../src/app/vision/math/matrix3';
@@ -7,6 +8,57 @@ import {
     relativeRotationFromHomography,
 } from '../src/app/vision/geometry/rotational-camera';
 import { buildWorld, deg, paintMovingObject, renderView, scaleImage } from './scene';
+import { FeatureExtractor } from '../src/app/vision/pipeline/feature-extractor';
+import { CornerDetector } from '../src/app/vision/features/corner-detector';
+import { DescriptorMatcher } from '../src/app/vision/features/descriptor-matcher';
+import { RansacEstimator } from '../src/app/vision/geometry/ransac';
+import { mat3Identity } from '../src/app/vision/math/matrix3';
+
+function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: Uint8Array } {
+    const bytes = new Uint8Array(buffer);
+    const view = new DataView(buffer);
+    let offset = 8;
+    let width = 0;
+    let height = 0;
+    const idat: Uint8Array[] = [];
+    while (offset < bytes.length) {
+        const length = view.getUint32(offset);
+        const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+        const body = bytes.subarray(offset + 8, offset + 8 + length);
+        if (type === 'IHDR') {
+            width = view.getUint32(offset + 8);
+            height = view.getUint32(offset + 12);
+        } else if (type === 'IDAT') {
+            idat.push(body);
+        }
+        offset += 12 + length;
+    }
+    const raw = inflateSync(Buffer.concat(idat));
+    const stride = width * 4;
+    const data = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        const filter = raw[y * (stride + 1)];
+        for (let i = 0; i < stride; i++) {
+            const value = raw[y * (stride + 1) + 1 + i];
+            const left = i >= 4 ? data[y * stride + i - 4] : 0;
+            const up = y > 0 ? data[(y - 1) * stride + i] : 0;
+            const upLeft = i >= 4 && y > 0 ? data[(y - 1) * stride + i - 4] : 0;
+            let predictor = 0;
+            if (filter === 1) predictor = left;
+            else if (filter === 2) predictor = up;
+            else if (filter === 3) predictor = (left + up) >> 1;
+            else if (filter === 4) {
+                const p = left + up - upLeft;
+                const pa = Math.abs(p - left);
+                const pb = Math.abs(p - up);
+                const pc = Math.abs(p - upLeft);
+                predictor = pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
+            }
+            data[y * stride + i] = (value + predictor) & 0xff;
+        }
+    }
+    return { width, height, data };
+}
 
 function angleBetween(a: Mat3, b: Mat3): number {
     const rel = mat3Multiply(a, mat3Transpose(b));
@@ -189,6 +241,30 @@ async function runScenario(
         exported !== null && exportedPixels <= params.compose.exportMegapixels + 0.05,
         `${exportedPixels.toFixed(2)} MP (cap ${params.compose.exportMegapixels} MP)`,
     );
+    if (exported && options.tiling) {
+        const single = await pipeline.exportImage(1 << 20);
+        const whole = decodePng((single ?? exported).png);
+        const tiled = await pipeline.exportImage(256);
+        const pieces = tiled ? decodePng(tiled.png) : null;
+        let difference = Number.POSITIVE_INFINITY;
+        let covered = 0;
+        if (pieces && pieces.width === whole.width && pieces.height === whole.height) {
+            let sum = 0;
+            let count = 0;
+            for (let i = 0; i < whole.data.length; i += 4) {
+                if (whole.data[i + 3] === 0 && pieces.data[i + 3] === 0) continue;
+                count++;
+                for (let c = 0; c < 3; c++) sum += Math.abs(whole.data[i + c] - pieces.data[i + c]);
+                if (whole.data[i + 3] === 255) covered++;
+            }
+            difference = count === 0 ? 0 : sum / (count * 3);
+        }
+        check(
+            `${title}: tiled export matches a single-tile export`,
+            difference < 0.75 && covered > 0,
+            `mean |Δ| ${difference.toFixed(3)} levels over ${covered} px (256 px tiles vs one tile)`,
+        );
+    }
 
     if (options.moving) {
         const ghosts = reports
@@ -200,6 +276,55 @@ async function runScenario(
             `max ${Math.max(0, ...ghosts).toFixed(2)}% of the overlap flagged as a moving object`,
         );
     }
+}
+
+function zoomInliers(levels: number): { inliers: number; scale: number } {
+    const params = structuredClone(DEFAULT_PARAMS);
+    params.detect.scaleLevels = levels;
+    const extractor = new FeatureExtractor(
+        () => params,
+        () => new CornerDetector(),
+    );
+    const world = buildWorld(11);
+    const wide = extractor.extract(renderView(world, mat3Identity(), 700, 640, 480));
+    const zoomed = extractor.extract(renderView(world, mat3Identity(), 700 * 1.6, 640, 480));
+    const matches = new DescriptorMatcher().match(
+        wide.descriptors,
+        wide.keypoints.length,
+        zoomed.descriptors,
+        zoomed.keypoints.length,
+        params.match,
+    );
+    const points = matches
+        .filter((match) => match.accepted)
+        .map((match) => ({
+            sx: wide.keypoints[match.queryIndex].x,
+            sy: wide.keypoints[match.queryIndex].y,
+            dx: zoomed.keypoints[match.trainIndex].x,
+            dy: zoomed.keypoints[match.trainIndex].y,
+        }));
+    const fit =
+        points.length >= 4
+            ? new RansacEstimator({ ...params.model, model: 'similarity' }).fit(points)
+            : null;
+    if (!fit) return { inliers: 0, scale: 0 };
+    return { inliers: fit.inlierCount, scale: Math.hypot(fit.matrix[0], fit.matrix[3]) };
+}
+
+function runScaleChecks(): void {
+    console.log('\n=== scale invariance ===');
+    const single = zoomInliers(1);
+    const multi = zoomInliers(3);
+    check(
+        'multi-scale detection matches a 1.6× zoom',
+        multi.inliers >= 25 && Math.abs(multi.scale - 1.6) < 0.05,
+        `${multi.inliers} inliers, zoom ${multi.scale.toFixed(3)} (single scale: ${single.inliers} inliers)`,
+    );
+    check(
+        'multi-scale beats single scale under zoom',
+        multi.inliers > single.inliers * 2,
+        `${multi.inliers} vs ${single.inliers} inliers`,
+    );
 }
 
 function runUnitChecks(): void {
@@ -242,6 +367,7 @@ fast.compose.composeWidth = 480;
 fast.detect.workWidth = 480;
 
 runUnitChecks();
+runScaleChecks();
 await runScenario(
     'horizontal sequence',
     structuredClone(fast),
@@ -256,7 +382,7 @@ await runScenario(
     structuredClone(fast),
     [0, 14, 28, 28, 14, 0],
     [0, 0, 0, 12, 12, 12],
-    { moving: true },
+    { moving: true, tiling: true },
 );
 
 await runScenario(
@@ -267,6 +393,13 @@ await runScenario(
     { distortion: -0.1 },
 );
 
+await runScenario(
+    'strong barrel κ₁ = -0.20',
+    structuredClone(fast),
+    [0, 12, 24, 36, 48, 60],
+    [0, 0, 0, 0, 0, 0],
+    { distortion: -0.2 },
+);
 await runScenario(
     'vignetted lens β = -0.25',
     structuredClone(fast),

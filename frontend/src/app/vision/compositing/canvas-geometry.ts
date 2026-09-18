@@ -311,3 +311,49 @@ export function angularSpan(
             toDegrees,
     };
 }
+
+export interface CanvasTransfer {
+    scaleU: number;
+    offsetU: number;
+    scaleV: number;
+    offsetV: number;
+}
+
+export function canvasTransfer(from: CanvasGeometry, to: CanvasGeometry): CanvasTransfer {
+    if (from.surface === 'planar') {
+        const scale = to.planarScale / from.planarScale;
+        return {
+            scaleU: scale,
+            offsetU: to.width / 2 - (scale * from.width) / 2,
+            scaleV: scale,
+            offsetV: to.height / 2 - (scale * from.height) / 2,
+        };
+    }
+    const scaleU = to.width / from.width;
+    if (from.surface === 'spherical') {
+        return { scaleU, offsetU: 0, scaleV: to.height / from.height, offsetV: 0 };
+    }
+    return {
+        scaleU,
+        offsetU: 0,
+        scaleV: scaleU,
+        offsetV: to.height / 2 - (scaleU * from.height) / 2,
+    };
+}
+
+export function clipFootprint(
+    geometry: CanvasGeometry,
+    footprint: { u0: number; u1: number; v0: number; v1: number },
+    clip: CanvasBox,
+): CanvasBox | null {
+    const v0 = Math.max(footprint.v0, clip.v0);
+    const v1 = Math.min(footprint.v1, clip.v1);
+    if (v1 < v0) return null;
+    const shifts = geometry.surface === 'planar' ? [0] : [0, -geometry.width, geometry.width];
+    for (const shift of shifts) {
+        const u0 = Math.max(footprint.u0 + shift, clip.u0);
+        const u1 = Math.min(footprint.u1 + shift, clip.u1);
+        if (u1 >= u0) return { u0, u1, v0, v1 };
+    }
+    return null;
+}

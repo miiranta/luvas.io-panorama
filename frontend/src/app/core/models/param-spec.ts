@@ -10,7 +10,7 @@ export interface ParamSpec {
     max?: number;
     step?: number;
     options?: readonly string[];
-    restage: 'detect' | 'match' | 'model' | 'global' | 'compose';
+    restage?: 'detect' | 'match' | 'model' | 'global' | 'compose';
     advanced?: boolean;
 }
 
@@ -135,6 +135,30 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         label: 'Sub-pixel',
         hint: 'Fits a quadratic to the response and takes its vertex',
         kind: 'toggle',
+        advanced: true,
+        restage: 'detect',
+    },
+    {
+        group: 'detect',
+        key: 'scaleLevels',
+        label: 'Scales',
+        hint: 'Pyramid levels searched for corners (1 = single scale)',
+        kind: 'range',
+        min: 1,
+        max: 6,
+        step: 1,
+        advanced: true,
+        restage: 'detect',
+    },
+    {
+        group: 'detect',
+        key: 'scaleFactor',
+        label: 'Scale step',
+        hint: 'Size ratio between consecutive pyramid levels',
+        kind: 'range',
+        min: 1.2,
+        max: 2,
+        step: 0.05,
         advanced: true,
         restage: 'detect',
     },
@@ -427,9 +451,31 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         hint: 'Width in px at which each photo is reprojected into the mosaic',
         kind: 'range',
         min: 320,
-        max: 2048,
+        max: 4096,
         step: 64,
         advanced: true,
         restage: 'compose',
+    },
+    {
+        group: 'compose',
+        key: 'exportScale',
+        label: 'Export scale',
+        hint: 'Export resolution as a fraction of the native sampling of the photos',
+        kind: 'range',
+        min: 0.25,
+        max: 2,
+        step: 0.05,
+        advanced: true,
+    },
+    {
+        group: 'compose',
+        key: 'exportMegapixels',
+        label: 'Export cap',
+        hint: 'Upper bound in megapixels for the export; it is rendered in tiles and streamed, so this only limits the file size',
+        kind: 'range',
+        min: 1,
+        max: 400,
+        step: 1,
+        advanced: true,
     },
 ];

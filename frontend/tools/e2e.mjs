@@ -583,6 +583,7 @@ try {
         matcher: rows.find((row) => row.startsWith('matching')) ?? null,
         detector: rows.find((row) => row.startsWith('detection')) ?? null,
         warper: rows.find((row) => row.startsWith('warping')) ?? null,
+        compositor: rows.find((row) => row.startsWith('compositing')) ?? null,
       };
     })()
   `);
@@ -600,6 +601,11 @@ try {
         'detection accelerated by WebGL2 (response checked against the CPU)',
         gpuState?.detector != null && gpuState.detector.startsWith('detectionwebgl2'),
         gpuState?.detector ?? 'missing',
+    );
+    check(
+        'compositing accelerated by WebGL2 (mosaic checked against the CPU)',
+        gpuState?.compositor != null && gpuState.compositor.startsWith('compositingwebgl2'),
+        gpuState?.compositor ?? 'missing',
     );
     check(
         'warping accelerated by WebGL2 (tiles checked against the CPU)',

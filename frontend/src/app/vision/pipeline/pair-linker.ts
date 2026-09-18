@@ -5,6 +5,7 @@ import { BundleObservation } from '../geometry/bundle-adjuster';
 import { brownLoweVerified } from '../geometry/pose-graph';
 import { ModelFit, RansacEstimator } from '../geometry/ransac';
 import { focalFromHomography } from '../geometry/rotational-camera';
+import { undistort } from '../geometry/lens';
 import { Correspondence } from '../geometry/transform-model';
 import { ColorImage } from '../imaging/image';
 import { Mat3 } from '../math/matrix3';
@@ -29,10 +30,20 @@ export function isFitted(pair: PairMatch): pair is FittedPair {
     return pair.fit !== null;
 }
 
+export interface LensModel {
+    focal(frame: Keyframe): number;
+    distortion: number;
+}
+
+const NO_LENS: LensModel = { focal: () => 1, distortion: 0 };
+
 export class PairLinker {
+    private readonly scratch = new Float64Array(2);
+
     constructor(
         private readonly params: () => PipelineParams,
         private readonly matcher: () => DescriptorMatcher,
+        private readonly lens: () => LensModel = () => NO_LENS,
     ) {}
 
     match(query: Keyframe, train: Keyframe): PairMatch {
@@ -49,12 +60,21 @@ export class PairLinker {
             if (!match.accepted) return;
             const q = query.keypoints[match.queryIndex];
             const t = train.keypoints[match.trainIndex];
-            correspondences.push({ sx: q.x, sy: q.y, dx: t.x, dy: t.y });
+            correspondences.push({
+                sx: q.x,
+                sy: q.y,
+                dx: t.x,
+                dy: t.y,
+                sourceScale: q.scale,
+                targetScale: t.scale,
+            });
             origin.push(index);
         });
         const fit =
             correspondences.length >= MIN_CORRESPONDENCES
-                ? new RansacEstimator(this.params().model).fit(correspondences)
+                ? new RansacEstimator(this.params().model).fit(
+                      this.rectify(correspondences, query, train),
+                  )
                 : null;
         const matches: MatchRecord[] = raw.map((match) => ({ ...match, inlier: false }));
         if (fit) {
@@ -63,6 +83,38 @@ export class PairLinker {
             });
         }
         return { fit, matches, correspondences };
+    }
+
+    private rectify(
+        correspondences: readonly Correspondence[],
+        query: Keyframe,
+        train: Keyframe,
+    ): Correspondence[] {
+        const lens = this.lens();
+        if (lens.distortion === 0) return correspondences.slice();
+        const queryFocal = lens.focal(query);
+        const trainFocal = lens.focal(train);
+        return correspondences.map((c) => {
+            const [sx, sy] = this.undistortPoint(c.sx, c.sy, query, queryFocal, lens.distortion);
+            const [dx, dy] = this.undistortPoint(c.dx, c.dy, train, trainFocal, lens.distortion);
+            return { ...c, sx, sy, dx, dy };
+        });
+    }
+
+    private undistortPoint(
+        x: number,
+        y: number,
+        frame: Keyframe,
+        focal: number,
+        distortion: number,
+    ): [number, number] {
+        undistort(
+            (x - frame.centreX) / focal,
+            (y - frame.centreY) / focal,
+            distortion,
+            this.scratch,
+        );
+        return [frame.centreX + focal * this.scratch[0], frame.centreY + focal * this.scratch[1]];
     }
 
     verified(inliers: number, accepted: number, requireRatio = true): boolean {
@@ -122,7 +174,16 @@ function sampleObservations(
         if (!fit.inliers[c]) return;
         kept++;
         if (kept % stride !== 0) return;
-        observations.push({ cameraA, cameraB, ax: pair.sx, ay: pair.sy, bx: pair.dx, by: pair.dy });
+        observations.push({
+            cameraA,
+            cameraB,
+            ax: pair.sx,
+            ay: pair.sy,
+            bx: pair.dx,
+            by: pair.dy,
+            scaleA: pair.sourceScale ?? 1,
+            scaleB: pair.targetScale ?? 1,
+        });
     });
     return observations;
 }

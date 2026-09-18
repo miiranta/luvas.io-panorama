@@ -19,7 +19,8 @@ import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
 import { LiveTracker } from './live-tracker';
-import { MosaicCompositor, ProgressReporter, RasterImage } from './mosaic-compositor';
+import { MosaicCompositor, ProgressReporter } from './mosaic-compositor';
+import { ExportedImage } from './panorama-exporter';
 import { PairLink } from './pair-link';
 import { PairLinker, isFitted } from './pair-linker';
 
@@ -48,6 +49,10 @@ export class StitchPipeline {
     private readonly linker = new PairLinker(
         () => this.params,
         () => this.accelerators.matcher(),
+        () => ({
+            focal: (frame) => this.cameras.focalFor(frame),
+            distortion: this.cameras.distortion,
+        }),
     );
     private readonly features = new FeatureExtractor(
         () => this.params,
@@ -61,6 +66,7 @@ export class StitchPipeline {
         this.links,
         this.cameras,
         (stage, progress) => this.reporter(stage, progress),
+        (width, height, bands, view) => this.accelerators.mosaics()(width, height, bands, view),
     );
     private readonly tracker = new LiveTracker(this.frames, this.features, this.linker);
 
@@ -293,10 +299,11 @@ export class StitchPipeline {
         };
     }
 
-    async exportImage(): Promise<RasterImage | null> {
+    async exportImage(tileSize?: number): Promise<ExportedImage | null> {
         return this.compositor.renderExport(
             this.params.compose.exportScale,
             this.params.compose.exportMegapixels,
+            tileSize,
         );
     }
 

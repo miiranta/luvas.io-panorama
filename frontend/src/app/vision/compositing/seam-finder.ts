@@ -1,5 +1,5 @@
 import { ComposeParams } from '../../core/models/params';
-import { Mosaic } from './mosaic';
+import { MosaicSurface, TileSnapshot, cellSource } from './mosaic-surface';
 import { WarpTile } from './warp-tile';
 
 class MinHeap {
@@ -77,39 +77,33 @@ export interface SeamStats {
 export class SeamFinder {
     constructor(private readonly params: ComposeParams) {}
 
-    cut(mosaic: Mosaic, tile: WarpTile, reference: Mosaic | null = null): SeamStats {
+    cut(mosaic: MosaicSurface, tile: WarpTile, reference: MosaicSurface | null = null): SeamStats {
         const params = this.params;
         const stats: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
         const step = this.step(tile);
-        const width = Math.max(1, Math.ceil(tile.width / step));
-        const height = Math.max(1, Math.ceil(tile.height / step));
+        const mine = mosaic.snapshot(tile, step);
+        const other: TileSnapshot | null = reference ? reference.snapshot(tile, step) : null;
+        const width = mine.width;
+        const height = mine.height;
         const cells = width * height;
-        const existing = new Float32Array(3);
         const overlap = new Uint8Array(cells);
         const difference = new Float32Array(cells);
         const present = new Uint8Array(cells);
         for (let y = 0; y < height; y++) {
-            const sy = Math.min(tile.height - 1, y * step + (step >> 1));
             for (let x = 0; x < width; x++) {
-                const sx = Math.min(tile.width - 1, x * step + (step >> 1));
+                const [sx, sy] = cellSource(tile, step, x, y);
                 const source = sy * tile.width + sx;
                 const cell = y * width + x;
                 if (tile.mask[source] <= 0) continue;
                 present[cell] = 1;
-                const index = mosaic.indexAt(tile.u0 + sx, tile.v0 + sy);
-                if (index < 0) continue;
-                if (
-                    !mosaic.meanColorAt(index, existing) &&
-                    !reference?.meanColorAt(index, existing)
-                ) {
-                    continue;
-                }
+                const snapshot = mine.filled[cell] ? mine : other?.filled[cell] ? other : null;
+                if (!snapshot) continue;
                 overlap[cell] = 1;
                 stats.overlapPixels += step * step;
                 const d =
-                    (Math.abs(existing[0] - tile.color[source * 3]) +
-                        Math.abs(existing[1] - tile.color[source * 3 + 1]) +
-                        Math.abs(existing[2] - tile.color[source * 3 + 2])) /
+                    (Math.abs(snapshot.mean[cell * 3] - tile.color[source * 3]) +
+                        Math.abs(snapshot.mean[cell * 3 + 1] - tile.color[source * 3 + 1]) +
+                        Math.abs(snapshot.mean[cell * 3 + 2] - tile.color[source * 3 + 2])) /
                     3;
                 difference[cell] = d;
                 if (d > params.deghostThreshold) stats.inconsistentPixels += step * step;
@@ -127,25 +121,18 @@ export class SeamFinder {
         const cost = new Float64Array(cells).fill(Number.POSITIVE_INFINITY);
         const label = new Int8Array(cells).fill(-1);
         const heap = new MinHeap();
-        for (let y = 0; y < height; y++) {
-            const sy = Math.min(tile.height - 1, y * step + (step >> 1));
-            for (let x = 0; x < width; x++) {
-                const cell = y * width + x;
-                if (overlap[cell]) continue;
-                if (present[cell]) {
-                    cost[cell] = 0;
-                    label[cell] = 1;
-                    heap.push(0, cell, 1);
-                    continue;
-                }
-                const sx = Math.min(tile.width - 1, x * step + (step >> 1));
-                const index = mosaic.indexAt(tile.u0 + sx, tile.v0 + sy);
-                if (index < 0) continue;
-                if (mosaic.hasCoverage(index) || reference?.hasCoverage(index)) {
-                    cost[cell] = 0;
-                    label[cell] = 0;
-                    heap.push(0, cell, 0);
-                }
+        for (let cell = 0; cell < cells; cell++) {
+            if (overlap[cell]) continue;
+            if (present[cell]) {
+                cost[cell] = 0;
+                label[cell] = 1;
+                heap.push(0, cell, 1);
+                continue;
+            }
+            if (mine.covered[cell] || other?.covered[cell]) {
+                cost[cell] = 0;
+                label[cell] = 0;
+                heap.push(0, cell, 0);
             }
         }
         const neighbours = [-1, 1, -width, width];

@@ -71,7 +71,7 @@ export class CornerDetector {
                 const value = response[i];
                 if (value <= threshold || dilated[i] > value) continue;
                 const [px, py] = params.subPixel ? refineSubPixel(response, width, x, y) : [x, y];
-                found.push({ x: px, y: py, response: value, orientation: 0 });
+                found.push({ x: px, y: py, response: value, orientation: 0, scale: 1 });
             }
         }
         return found;

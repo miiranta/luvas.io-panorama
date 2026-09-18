@@ -6,6 +6,7 @@ import { KeyframeStore } from './keyframe-store';
 import { FittedPair, PairLinker, isFitted } from './pair-linker';
 
 const PREVIEW_KEYPOINTS = 320;
+const PREVIEW_SCALE_LEVELS = 1;
 const PREVIEW_CANDIDATES = 3;
 const MIN_PREVIEW_KEYPOINTS = 8;
 
@@ -20,7 +21,11 @@ export class LiveTracker {
         const anchors = this.frames.active.filter((frame) => frame.keypoints.length > 0);
         const latest = anchors.at(-1);
         if (!latest) return null;
-        const { keypoints, descriptors } = this.features.extract(work, PREVIEW_KEYPOINTS);
+        const { keypoints, descriptors } = this.features.extract(
+            work,
+            PREVIEW_KEYPOINTS,
+            PREVIEW_SCALE_LEVELS,
+        );
         if (keypoints.length < MIN_PREVIEW_KEYPOINTS) return null;
         const probe = new Keyframe(
             -1,

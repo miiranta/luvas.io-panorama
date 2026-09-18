@@ -7,6 +7,8 @@ export interface Correspondence {
     sy: number;
     dx: number;
     dy: number;
+    sourceScale?: number;
+    targetScale?: number;
 }
 
 export const MIN_PAIRS: Record<ModelKind, number> = {

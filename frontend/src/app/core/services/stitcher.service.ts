@@ -10,6 +10,7 @@ import {
 import { PipelineState, WorkerRequest, WorkerResponse } from '../models/worker-protocol';
 
 const PREVIEW_INTERVAL = 260;
+const PREVIEW_DUTY_FACTOR = 1.5;
 
 @Injectable({ providedIn: 'root' })
 export class StitcherService {
@@ -19,6 +20,8 @@ export class StitcherService {
     private previewTimer: number | null = null;
     private previewInFlight = false;
     private previewSource: HTMLVideoElement | null = null;
+    private previewSentAt = 0;
+    private previewReadyAt = 0;
     private epoch = 0;
 
     readonly params = signal<PipelineParams>(structuredClone(DEFAULT_PARAMS));
@@ -87,11 +90,14 @@ export class StitcherService {
             case 'graph':
                 this.graph.set(message.graph);
                 break;
-            case 'preview':
+            case 'preview': {
+                const latency = performance.now() - this.previewSentAt;
+                this.previewReadyAt = performance.now() + latency * PREVIEW_DUTY_FACTOR;
                 if (message.epoch !== this.epoch) break;
                 this.previewInFlight = false;
                 this.preview.set(message.preview);
                 break;
+            }
             case 'state':
                 this.applyState(message.state);
                 break;
@@ -99,17 +105,10 @@ export class StitcherService {
                 this.status.set(message.detail);
                 break;
             case 'export': {
-                const data = new Uint8ClampedArray(message.pixels);
-                const image = new ImageData(data, message.width, message.height);
-                const canvas = document.createElement('canvas');
-                canvas.width = message.width;
-                canvas.height = message.height;
-                canvas.getContext('2d')?.putImageData(image, 0, 0);
-                canvas.toBlob((blob) => {
-                    if (blob && this.pendingExport) this.pendingExport(blob);
-                    this.pendingExport = null;
-                    this.busy.set(false);
-                }, 'image/png');
+                const blob = new Blob([message.png], { type: 'image/png' });
+                this.pendingExport?.(blob);
+                this.pendingExport = null;
+                this.busy.set(false);
                 break;
             }
             case 'error':
@@ -172,6 +171,7 @@ export class StitcherService {
     private tickPreview(): void {
         const source = this.previewSource;
         if (!source || this.previewInFlight || this.busy() || this.working()) return;
+        if (performance.now() < this.previewReadyAt) return;
         if (this.reports().every((report) => !report.accepted)) return;
         if (source.readyState < 2 || !source.videoWidth) return;
         const frame = this.rasterize(
@@ -182,6 +182,7 @@ export class StitcherService {
         );
         if (!frame) return;
         this.previewInFlight = true;
+        this.previewSentAt = performance.now();
         this.send(
             {
                 kind: 'preview',

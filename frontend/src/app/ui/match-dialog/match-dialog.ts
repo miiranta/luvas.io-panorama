@@ -87,14 +87,15 @@ export class MatchDialog {
             [payload.queryKeypoints, offset],
         ] as const) {
             for (const point of points) {
+                const radius = 4 * point.scale;
                 context.beginPath();
-                context.arc(point.x + shift, point.y, 4, 0, Math.PI * 2);
+                context.arc(point.x + shift, point.y, radius, 0, Math.PI * 2);
                 context.stroke();
                 context.beginPath();
                 context.moveTo(point.x + shift, point.y);
                 context.lineTo(
-                    point.x + shift + Math.cos(point.orientation) * 8,
-                    point.y + Math.sin(point.orientation) * 8,
+                    point.x + shift + Math.cos(point.orientation) * radius * 2,
+                    point.y + Math.sin(point.orientation) * radius * 2,
                 );
                 context.stroke();
             }

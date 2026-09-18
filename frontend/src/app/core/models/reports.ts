@@ -3,6 +3,7 @@ export interface KeypointRecord {
     y: number;
     response: number;
     orientation: number;
+    scale: number;
 }
 
 export interface MatchRecord {
@@ -116,6 +117,7 @@ export interface MosaicPayload {
     matchBackend: string;
     detectBackend: string;
     warpBackend: string;
+    mosaicBackend: string;
     pixels: ArrayBuffer;
     fillPercent: number;
     spanHorizontal: number;

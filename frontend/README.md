@@ -22,9 +22,9 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm run verify                      # 62 checagens numéricas contra ground truth sintético
+npm run verify                      # 75 checagens numéricas contra ground truth sintético
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
-npm run e2e                         # 27 checagens ponta a ponta em Chrome headless
+npm run e2e                         # 28 checagens ponta a ponta em Chrome headless
 ```
 
 ## Interface
@@ -108,10 +108,10 @@ superfície para cilíndrica ou esférica no painel — o plano estoura perto de
 
 | etapa | complexidade por foto nova | GPU | CPU |
 |---|---|---|---|
-| detectar | O(pixels) | 85 ms | 94 ms |
-| casar | O(k · n_kp²), k ≤ 5 | 24 ms | 62 ms |
-| bundle (janela) | O(W³ + obs) | 14 ms | 18 ms |
-| compor a prévia | O(3 · footprint) | 334 ms | 408 ms |
+| detectar (3 escalas) | O(pixels) | 145 ms | 152 ms |
+| casar | O(k · n_kp²), k ≤ 5 | 32 ms | 63 ms |
+| bundle (janela) | O(W³ + obs) | 26 ms | 20 ms |
+| compor a prévia | O(3 · footprint) | 269 ms | 433 ms |
 
 O custo não cresce com N depois que a janela enche. O refino global e a recomposição completa da
 prévia acontecem fora da captura, no tempo ocioso.
@@ -119,23 +119,31 @@ prévia acontecem fora da captura, no tempo ocioso.
 ### Exportação
 
 A prévia usa uma tela de 360° com `canvasWidth` px (1792 por padrão), então um panorama de 100°
-ocupa só ~500 px dela. Exportar essa tela era o motivo do PNG sair borrado. A exportação agora:
+ocupa só ~500 px dela. Exportar essa tela era o motivo do PNG sair borrado. A exportação é um
+passo à parte (`vision/pipeline/panorama-exporter.ts`), no mesmo desenho de resoluções do
+`stitching_detailed` do OpenCV:
 
-1. escolhe a escala da tela para amostrar as fotos na resolução nativa — `2π·f` px por volta no
-   cilindro/esfera e `2,4·f` no plano, com `f` a focal na resolução de composição;
-2. calcula a união dos footprints de todas as fotos **antes** de alocar e aloca só esse recorte
-   (alinhado à grade da pirâmide); se passar de `exportMegapixels` (8 MP por padrão), reduz a escala
-   até caber;
-3. compõe todas as fotos com as poses finais (warp na GPU, costura, ganhos, pirâmide laplaciana),
-   reportando progresso por foto.
+1. **escala nativa** — a tela é escolhida para amostrar as fotos na resolução delas: `2π·f` px por
+   volta no cilindro/esfera e `2,4·f` no plano, com `f` a focal na resolução de composição; a união
+   dos footprints de todas as fotos é calculada **antes** de alocar qualquer coisa;
+2. **costuras globais em baixa resolução** — todas as fotos são projetadas numa tela de ~2 MP e a
+   costura geodésica roda uma vez, na ordem de composição; a máscara final de cada foto (rampa +
+   costura) é guardada. Assim a decisão de "qual foto vale onde" é uma só para a imagem inteira;
+3. **ladrilhos em resolução cheia** — a saída é dividida em ladrilhos de 1024 px com **halo** de
+   128 px (maior que o suporte da pirâmide). Cada ladrilho compõe só as fotos cujo footprint o toca,
+   com a máscara global ampliada bilinearmente, na GPU quando disponível, e só o miolo é mantido;
+4. **PNG em fluxo** — ao fim de cada faixa de ladrilhos as linhas vão para um codificador PNG
+   próprio no worker (`vision/imaging/png-writer.ts`: filtro Paeth, `CompressionStream('deflate')`,
+   CRC dos chunks). A imagem inteira nunca existe num buffer nem num `<canvas>`, então os limites
+   de área de canvas dos navegadores (16,7 MP no Safari do iOS) não se aplicam.
 
-| cena sintética | prévia | exportação |
-|---|---|---|
-| cilíndrica, 4 fotos | 260×107 | 1024×448 |
-| varredura horizontal, 6 fotos | 902×361 | 1408×704 |
+O ladrilhamento é conferido: com ladrilhos de 256 px a exportação sai **idêntica bit a bit** à de
+um ladrilho único. Uma volta completa de 360° com 24 fotos de 1600×1200 sai em 12288×1536
+(18,9 MP, PNG de 34 MB) em 24 s no caminho CPU, e a emenda em 0°/360° é contínua (diferença entre a
+última e a primeira coluna igual à de colunas vizinhas quaisquer).
 
-`exportScale` (fração da resolução nativa) e `exportMegapixels` (teto de memória) ficam nas opções
-avançadas.
+`exportScale` (fração da resolução nativa, padrão 1) e `exportMegapixels` (teto do arquivo, padrão
+120 MP) ficam nas opções avançadas.
 
 ### Armazenamento para sessões longas
 
@@ -162,13 +170,14 @@ detalhes importam:
 
 ### Aceleração por GPU
 
-Quatro etapas rodam em **WebGL2** dentro do worker, todas num único contexto compartilhado
+Cinco etapas rodam em **WebGL2** dentro do worker, todas num único contexto compartilhado
 (`vision/acceleration/gl-context.ts`):
 
 | etapa | shader | conferência contra a CPU |
 |---|---|---|
 | warp | raio da tela → câmera → distorção κ₁ → amostragem com **mipmaps** (trilinear) → ganho e vinheta; saída RGBA8 | erro médio < 1,5 nível de cinza, máscara < 0,02 |
-| pirâmide da mistura | redução binomial 5×5 com decimação por 2 em `RGBA32F` (cor·m e m) | erro médio < 0,75 |
+| mosaico | acumuladores em texturas `RGBA32F` com mistura aditiva (`EXT_float_blend`): redução da pirâmide, bandas laplacianas acumuladas na resolução de cada nível, reconstrução, amostras para a costura | renders e amostras iguais à CPU (média < 0,75, máximo ≤ 6), inclusive numa janela que cruza a emenda de 360° |
+| pirâmide da mistura | redução binomial 5×5 com decimação por 2 em `RGBA32F` (cor·m e m), `texelFetch` | erro médio < 0,75 |
 | detecção | gaussiana σ_d → Sobel → produtos `Ix², Iy², IxIy` → gaussiana σ_i → Harris / Shi-Tomasi | pico ±5 %, erro médio ≤ 1 % do pico |
 | casamento | força bruta em Hamming com `popcount` em `RGBA32UI`, melhor e segundo melhor por descritor | igual bit a bit |
 
@@ -193,6 +202,20 @@ Dois cuidados deixam o warp barato na GPU: a textura da fonte (com mipmaps) fica
 a mesma foto é redesenhada, e a leitura volta em 8 bits (a fonte já é 8 bits), o que corta 4× o
 `readPixels` em relação a float e dispensa `EXT_color_buffer_float` — mais celulares ficam com o
 warp na GPU.
+
+O mosaico inteiro da prévia fica na GPU: a CPU só calcula a costura (Dijkstra numa grade reduzida,
+sequencial por natureza) e a cobertura. Na calibração a GPU compõe 5× mais rápido que a CPU
+(52 ms contra 262 ms). Dois achados do perfilador de CPU do worker (CDP `Profiler` anexado ao
+alvo do worker) mudaram o desenho:
+
+- **Realocar alvos custava mais que desenhar**: cada tamanho novo de ladrilho ou de nível da
+  pirâmide criava um framebuffer, e `checkFramebufferStatus` sincroniza CPU e GPU (3,2 s em 8
+  fotos). Os alvos agora só crescem (em passos de 128 px, compartilhados entre mosaicos), os
+  shaders endereçam por `texelFetch` com tamanho lógico, e a detecção guarda alocações por tamanho
+  de imagem — caiu para 0,12 s. A detecção também devolve gradiente e resposta numa leitura só;
+- **O rastreamento ao vivo ocupava metade do worker**: a extração a cada 260 ms somava 6 s em 18 s.
+  O serviço agora espera 1,5× a latência da última prévia antes de mandar outra, e a prévia usa só o
+  nível 0 da pirâmide.
 
 A camada de vetores desenha num canvas `desynchronized` e o vídeo e o overlay são promovidos a
 camadas de composição próprias, para o navegador compor na GPU.
@@ -286,14 +309,14 @@ src/app/
 | pasta | classes / funções principais | conceito | aula |
 |---|---|---|---|
 | `math/` | `matrix3`, `decomposition` (Jacobi, sistema linear), `so3` (eixo-ângulo, rotação mais próxima) | transformações, rotações | 01 |
-| `imaging/` | `toGray`, `gaussianKernel`, `blurGray`, `sobelGradients`, `mipPyramidFor` + `sampleTrilinear` | convolução, filtro gaussiano, gradiente, pré-filtro antes de reduzir | 02–04 |
+| `imaging/` | `toGray`, `gaussianKernel`, `blurGray`, `sobelGradients`, `mipPyramidFor` + `sampleTrilinear`, `grayPyramid`, `PngWriter` | convolução, filtro gaussiano, gradiente, pré-filtro antes de reduzir, pirâmide de escalas | 02–05 |
 | `features/` | `structureTensorMaps`, `CornerDetector` (Harris / Shi-Tomasi / FAST, NMS, ANMS, sub-pixel, orientação), `BriefDescriptor`, `DescriptorMatcher` (ratio test + cruzada) | detecção, descrição e casamento de características | 05 |
 | `geometry/` | `transform-model` (translação → homografia, DLT normalizado), `RansacEstimator` | transformações 2D, homografia, RANSAC | 07 |
 | `geometry/` | `rotational-camera` (K, f a partir de H, H → R), `lens` (κ₁), `BundleAdjuster`, `PoseGraph` (MST, componentes, referência) | modelo de câmera, distorção radial, alinhamento global, ordem das fotos | 01, 08 |
 | `compositing/` | `canvas-geometry` (plano / cilindro / esfera), `Warper`, `SeamFinder`, `ExposureCompensator`, `estimateVignetting`, `levelHorizon`, `Mosaic` | projeção, warp inverso, costura, compensação de exposição e vinheta | 01, 08 |
-| `compositing/` | `pyramid`, `Mosaic.addPyramidBands` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
-| `acceleration/` | `GlContext`, `SeparableBlur`, `BackendSelector`, `RoutedBackend`, backends de warp / pirâmide / detecção / casamento | engenharia (fora das aulas) | — |
-| `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `MosaicCompositor`, `LiveTracker`, `AcceleratorSuite` | fluxo do enunciado, etapas 1–6 | T1 |
+| `compositing/` | `pyramid`, `MosaicGrid` (janela, emenda de 360°, cobertura), `Mosaic.addPyramidBands` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
+| `acceleration/` | `GlContext`, `SeparableBlur`, `BackendSelector`, `RoutedBackend`, backends de warp / pirâmide / detecção / casamento, `GpuMosaic` + `MosaicBackend` | engenharia (fora das aulas) | — |
+| `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `MosaicCompositor`, `PanoramaExporter`, `LiveTracker`, `AcceleratorSuite` | fluxo do enunciado, etapas 1–6 | T1 |
 
 `StitchPipeline.addFrame` lê como o enunciado: `features.extract` → `linkToNeighbours` (casamento
 + RANSAC contra as câmeras vizinhas) → `cameras.placeRelativeTo` → `cameras.adjust` (bundle) →
@@ -316,6 +339,13 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   `(2r+1)²` em O(r) por pixel); ANMS por cobertura de quadrados (SSC, Bailo et al. 2018) com busca
   binária do raio, O(n log n) em vez de O(n²); refino sub-pixel ajustando a **quadrática 2D
   completa** (com o termo cruzado `∂²R/∂x∂y`) e tomando o vértice.
+- **Multiescala** (Aula 05 §7.1.1, "procurar cantos em todas as escalas"; desenho do ORB) — pirâmide
+  de 3 níveis com razão 1,5, cada nível pré-filtrado antes de reduzir (Aula 04); o mesmo detector
+  roda em todos os níveis com cotas de pontos proporcionais à área do nível, o BRIEF é amostrado no
+  nível do ponto (janela normalizada pela escala) e cada ponto volta à resolução cheia com sua
+  escala. Sob zoom de 1,6× entre duas vistas, o casamento vai de 4 inliers (escala única) para 76, e
+  a escala recuperada é 1,601. No bundle cada resíduo é dividido pela escala do ponto medido
+  (peso `1/s²`, a "incerteza do ponto" da Aula 07 §8.1.1).
 - **Descrição e casamento** — orientação dominante por histograma de gradientes; BRIEF rodado pela
   orientação; distância de Hamming com `popcount`; ratio test `d₁/d₂ < 0,75` e checagem mútua.
 - **Modelo** (Aula 07 §8.1, `vision/geometry/`) — DLT com normalização de Hartley resolvido pelo
@@ -335,7 +365,10 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   coordenadas normalizadas pela focal. κ₁ é um parâmetro compartilhado do bundle (a partir de 3
   câmeras, a priori σ = 0,1): as observações ficam em pixels crus, o ponto de origem é
   desdistorcido (Newton sobre o raio) e a projeção no destino é distorcida. O warp aplica a mesma
-  distorção ao buscar cada pixel na foto.
+  distorção ao buscar cada pixel na foto. Com κ₁ estimado, o RANSAC, a focal a partir de H e a
+  rotação inicial passam a usar os pontos **desdistorcidos** — a homografia entre pontos
+  desdistorcidos é exata para câmera que gira —, enquanto o desenho na tela e as observações do
+  bundle continuam em pixels crus.
 - **Composição** (Aula 08 §8.4, Aula 02 §3.5.5, Aula 04 §3.5) — cada pixel da tela gera um raio, o
   raio vai para a câmera por `R`, é distorcido por κ₁ e amostrado na fonte (warp inverso, sem
   buracos). Quando a tela reduz a foto, a amostragem usa **mipmaps** com nível escolhido pela
@@ -360,25 +393,28 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
 zoom), renderiza vistas com rotação conhecida e confere o pipeline contra o ground truth:
 
 - focal a partir de H com erro < 2 % e `H → R` com desvio < 0,2°;
-- 6 fotos em varredura horizontal, grade de 2 fileiras, lente com barril (κ₁ = −0,10), lente com
-  vinheta (β = −0,25), cilíndrica+feather e planar+afim: **todas** integradas, focal recuperada com
-  0,4–2 % de erro, yaw dentro de 1,5°;
-- κ₁ recuperado (−0,11 para −0,10 renderizado) e β recuperado (−0,24 para −0,25), e nenhuma
-  vinheta inventada nas cenas sem vinheta (|β| < 0,1);
+- detecção multiescala casando uma vista com a mesma vista ampliada 1,6× (76 inliers contra 4 da
+  escala única, escala recuperada 1,601);
+- 6 fotos em varredura horizontal, grade de 2 fileiras, lente com barril (κ₁ = −0,10 e −0,20),
+  lente com vinheta (β = −0,25), cilíndrica+feather e planar+afim: **todas** integradas, focal
+  recuperada com 0,1–2 % de erro, yaw dentro de 1,5°;
+- κ₁ recuperado (−0,102 para −0,10 e −0,197 para −0,20) e β recuperado (−0,24 para −0,25), e
+  nenhuma vinheta inventada nas cenas sem vinheta (|β| < 0,1);
 - refino global preservando o alinhamento;
-- exportação amostrada acima da prévia e dentro do teto de megapixels;
+- exportação amostrada acima da prévia e dentro do teto de megapixels, e exportação em ladrilhos de
+  256 px idêntica à de um ladrilho único (PNG decodificado e comparado pixel a pixel);
 - bundle adjustment reduzindo o erro de reprojeção de 7–41 px para ~0,9 px;
 - imagem intrusa de outra cena rejeitada (4–5 inliers contra ~70 dos pares válidos);
 - objeto móvel detectado como pixels inconsistentes na sobreposição;
 - custo por foto estável com N crescente e no máximo 5 pares avaliados por foto.
 
-`npm run e2e` (27 checagens) sobe o Chrome headless com uma câmera falsa (`--use-file-for-fake-video-capture`
+`npm run e2e` (28 checagens) sobe o Chrome headless com uma câmera falsa (`--use-file-for-fake-video-capture`
 alimentado por um Y4M sintético), clica no disparador 7 vezes e confere no navegador real:
 getUserMedia, acumulação no canvas, HUD com o ângulo coberto, linhas desenhadas sobre a câmera
 (~50 k px pintados), rastreamento ao vivo (6/6 amostras), linhas atrás dos controles e só sobre o vídeo (ordem de
 empilhamento conferida), popup de comparação aberto pelo botão (74 inliers, 88 % dos pares,
 0,7 px) com o **✕** inteiro dentro do quadro, **✕** e **⬇** do minimapa ampliado sem
-sobreposição, os quatro aceleradores de fato em WebGL2 (o rótulo precisa começar por `webgl2`),
+sobreposição, os cinco aceleradores de fato em WebGL2 (o rótulo precisa começar por `webgl2`),
 exportação bloqueada enquanto o selo diz `compositing` e liberada depois, exportação real de um PNG
 em resolução cheia, selects refletindo os parâmetros ativos, recomposição ao trocar a superfície,
 grafo renderizado, diálogo de reinício que cancela sem apagar, ícones centrados (desvio 0,00 px) e
@@ -406,17 +442,16 @@ tela ficam em `/tmp/e2e`.
   ponto nodal deixam desalinhamento que nenhum bundle resolve — a costura esconde, não corrige.
 - **Distorção radial com um termo só**: κ₁ cobre o barril/almofada típicos de celular; lentes
   muito grande-angulares (olho de peixe) pediriam κ₂ ou um modelo equidistante.
-- **Homografias par a par sem desdistorção**: RANSAC e a focal inicial usam os pontos crus; só o
-  bundle modela κ₁. Com distorção forte a inicialização é pior, mas o bundle converge.
-- **Escala**: o detector é de escala única (Harris/FAST). Aproximar ou afastar muito entre fotos
-  reduz a repetibilidade; um detector DoG multiescala resolveria.
+- **Primeiras fotos sem κ₁**: κ₁ só é estimado a partir de 3 câmeras; os dois primeiros pares são
+  ajustados com pontos crus e só o refino global os corrige depois.
+- **Escala só para casar**: a detecção é multiescala, mas o modelo de câmera tem uma focal única;
+  fotos com zoom diferente casam, mas não entram no mesmo panorama com a geometria certa.
 - **Sem importação de arquivos**: a app só trabalha com a câmera ao vivo; para testar sem câmera,
   use a câmera falsa do Chrome (`npm run fakecam` + `npm run e2e`).
 - **Recompressão JPEG** (qualidade 0,94) das fontes arquivadas introduz uma perda pequena na
   mistura de fotos antigas quando um parâmetro é alterado depois e na exportação.
-- **Teto de exportação**: acima de `exportMegapixels` a exportação reduz a escala para caber na
-  memória (os acumuladores custam ~55 B/pixel). Uma volta completa de 360° na resolução nativa de um
-  celular não cabe no padrão de 8 MP.
-- **Custo de composição da prévia** ainda domina (~330 ms/foto com GPU): a redução da pirâmide e o
-  warp estão na GPU, mas a acumulação das bandas, a costura e a reconstrução ainda são CPU. Manter
-  os acumuladores como texturas levaria o resto para a GPU.
+- **Ida e volta do ladrilho**: o warp roda na GPU mas o ladrilho volta à CPU para a costura (que
+  precisa da cor) e sobe de novo para o mosaico. Ler só a grade reduzida da costura e aplicar a
+  máscara na GPU tiraria essa viagem.
+- **Seleção de GPU em celulares**: o mosaico na GPU exige `EXT_float_blend`; sem ele (vários
+  celulares), a prévia e a exportação ficam na CPU — funcionam, mais devagar.

@@ -3,7 +3,7 @@ import { ColorImage } from '../imaging/image';
 import { mipPyramidFor, sampleTrilinear } from '../imaging/mip-pyramid';
 import { Mat3, mat3Identity } from '../math/matrix3';
 import { Backend, BackendSelector, Calibration, RoutedBackend } from './backend-selector';
-import { GlContext, GlProgram, GlTarget } from './gl-context';
+import { GlContext, GlProgram, GlTarget, growTarget } from './gl-context';
 
 const CALIBRATION_SIDES = [128, 256, 512];
 const AGREEMENT_TOLERANCE = 1.5;
@@ -331,10 +331,7 @@ class GpuWarpBackend implements WarpBackend {
     }
 
     private allocate(width: number, height: number): boolean {
-        if (this.target && this.target.width === width && this.target.height === height)
-            return true;
-        this.context.release(this.target);
-        this.target = this.context.target(this.context.byteTexture(width, height), width, height);
+        this.target = growTarget(this.context, this.target, width, height, 'byte');
         return this.target !== null;
     }
 

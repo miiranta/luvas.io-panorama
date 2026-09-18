@@ -125,9 +125,9 @@ async function handle(request: WorkerRequest): Promise<void> {
                             kind: 'export',
                             width: image.width,
                             height: image.height,
-                            pixels: image.pixels,
+                            png: image.png,
                         },
-                        [image.pixels],
+                        [image.png],
                     );
                 } else {
                     post({ kind: 'error', message: 'nothing to export' });

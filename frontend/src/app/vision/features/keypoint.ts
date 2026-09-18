@@ -3,4 +3,5 @@ export interface Keypoint {
     y: number;
     response: number;
     orientation: number;
+    scale: number;
 }

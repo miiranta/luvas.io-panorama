@@ -1,134 +1,83 @@
 import { BlurBackend, cpuBlurBackend } from '../acceleration/blur-backend';
 import { CanvasBox } from './canvas-geometry';
+import {
+    MosaicSurface,
+    MosaicView,
+    TileSnapshot,
+    cellSource,
+    snapshotGrid,
+} from './mosaic-surface';
+import { MosaicGrid } from './mosaic-grid';
 import { PyramidLevel, expandLevel, gaussianPyramid } from './pyramid';
 import { WarpTile } from './warp-tile';
 
-export interface MosaicView {
-    u0: number;
-    v0: number;
-    canvasWidth: number;
-}
-
-export class Mosaic {
-    readonly width: number;
-    readonly height: number;
-    readonly bands: number;
-    readonly originU: number;
-    readonly originV: number;
-    readonly canvasWidth: number;
+export class Mosaic extends MosaicGrid implements MosaicSurface {
+    readonly kind = 'cpu';
     readonly bandColor: Float32Array[] = [];
     readonly bandWeight: Float32Array[] = [];
-    readonly bandWidth: number[] = [];
-    readonly bandHeight: number[] = [];
     readonly flatColor: Float32Array;
     readonly flatWeight: Float32Array;
-    readonly coverage: Uint8Array;
-    private dirty: CanvasBox | null = null;
-    private covered: CanvasBox | null = null;
 
     constructor(width: number, height: number, bands: number, view?: MosaicView) {
-        this.width = width;
-        this.height = height;
-        this.bands = Math.max(1, bands);
-        this.originU = view?.u0 ?? 0;
-        this.originV = view?.v0 ?? 0;
-        this.canvasWidth = view?.canvasWidth ?? width;
+        super(width, height, bands, view);
         const n = width * height;
         this.flatColor = new Float32Array(n * 3);
         this.flatWeight = new Float32Array(n);
-        this.coverage = new Uint8Array(n);
         for (let level = 0; level < this.bands; level++) {
-            const levelWidth = Math.max(1, Math.ceil(width / (1 << level)));
-            const levelHeight = Math.max(1, Math.ceil(height / (1 << level)));
-            this.bandWidth.push(levelWidth);
-            this.bandHeight.push(levelHeight);
-            this.bandColor.push(new Float32Array(levelWidth * levelHeight * 3));
-            this.bandWeight.push(new Float32Array(levelWidth * levelHeight));
+            const cells = this.bandWidth[level] * this.bandHeight[level];
+            this.bandColor.push(new Float32Array(cells * 3));
+            this.bandWeight.push(new Float32Array(cells));
         }
     }
 
-    hasCoverage(index: number): boolean {
-        return this.coverage[index] === 1;
-    }
-
-    column(rawU: number): number {
-        const canvas = this.canvasWidth;
-        const absolute = ((rawU % canvas) + canvas) % canvas;
-        let local = absolute - this.originU;
-        if (local < 0) local += canvas;
-        return local < this.width ? local : -1;
-    }
-
-    row(rawV: number): number {
-        const local = rawV - this.originV;
-        return local >= 0 && local < this.height ? local : -1;
-    }
-
-    indexAt(rawU: number, rawV: number): number {
-        const u = this.column(rawU);
-        if (u < 0) return -1;
-        const v = this.row(rawV);
-        return v < 0 ? -1 : v * this.width + u;
-    }
-
-    private levelColumn(level: number, rawU: number): number {
-        const canvas = Math.max(1, this.canvasWidth >> level);
-        const absolute = ((rawU % canvas) + canvas) % canvas;
-        let local = absolute - (this.originU >> level);
-        if (local < 0) local += canvas;
-        return local < this.bandWidth[level] ? local : -1;
-    }
-
-    private levelRow(level: number, rawV: number): number {
-        const local = rawV - (this.originV >> level);
-        return local >= 0 && local < this.bandHeight[level] ? local : -1;
-    }
-
-    markDirty(tile: WarpTile): void {
-        const spansWidth = tile.width >= this.width;
-        const left = spansWidth ? 0 : Math.max(0, this.column(tile.u0));
-        const right = spansWidth ? this.width - 1 : Math.min(this.width - 1, left + tile.width - 1);
-        const top = Math.max(0, tile.v0 - this.originV);
-        const bottom = Math.min(this.height - 1, tile.v0 + tile.height - 1 - this.originV);
-        if (!this.dirty) {
-            this.dirty = { u0: left, v0: top, u1: right, v1: bottom };
-            return;
-        }
-        this.dirty.u0 = Math.min(this.dirty.u0, left);
-        this.dirty.v0 = Math.min(this.dirty.v0, top);
-        this.dirty.u1 = Math.max(this.dirty.u1, right);
-        this.dirty.v1 = Math.max(this.dirty.v1, bottom);
-    }
-
-    reset(): void {
-        if (!this.dirty) return;
-        const wrapped = this.dirty.u1 >= this.width;
-        const u0 = wrapped ? 0 : Math.max(0, this.dirty.u0);
-        const u1 = wrapped ? this.width - 1 : Math.min(this.width - 1, this.dirty.u1);
-        const v0 = Math.max(0, this.dirty.v0);
-        const v1 = Math.min(this.height - 1, this.dirty.v1);
-        const span = u1 - u0 + 1;
-        for (let v = v0; v <= v1; v++) {
-            const start = v * this.width + u0;
-            this.coverage.fill(0, start, start + span);
+    protected clearAccumulators(box: CanvasBox): void {
+        const span = box.u1 - box.u0 + 1;
+        for (let v = box.v0; v <= box.v1; v++) {
+            const start = v * this.width + box.u0;
             this.flatWeight.fill(0, start, start + span);
             this.flatColor.fill(0, start * 3, (start + span) * 3);
         }
         for (let level = 0; level < this.bands; level++) {
             const stride = this.bandWidth[level];
-            const levelU0 = u0 >> level;
-            const levelU1 = Math.min(stride - 1, u1 >> level);
+            const levelU0 = box.u0 >> level;
+            const levelU1 = Math.min(stride - 1, box.u1 >> level);
             const levelSpan = levelU1 - levelU0 + 1;
             if (levelSpan <= 0) continue;
-            const levelV1 = Math.min(this.bandHeight[level] - 1, v1 >> level);
-            for (let v = v0 >> level; v <= levelV1; v++) {
+            const levelV1 = Math.min(this.bandHeight[level] - 1, box.v1 >> level);
+            for (let v = box.v0 >> level; v <= levelV1; v++) {
                 const start = v * stride + levelU0;
                 this.bandWeight[level].fill(0, start, start + levelSpan);
                 this.bandColor[level].fill(0, start * 3, (start + levelSpan) * 3);
             }
         }
-        this.dirty = null;
-        this.covered = null;
+    }
+
+    snapshot(tile: WarpTile, step: number): TileSnapshot {
+        const { width, height } = snapshotGrid(tile, step);
+        const cells = width * height;
+        const mean = new Float32Array(cells * 3);
+        const filled = new Uint8Array(cells);
+        const covered = new Uint8Array(cells);
+        const colour = new Float32Array(3);
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const [sx, sy] = cellSource(tile, step, x, y);
+                const index = this.indexAt(tile.u0 + sx, tile.v0 + sy);
+                if (index < 0) continue;
+                const cell = y * width + x;
+                covered[cell] = this.coverage[index];
+                if (!this.meanColorAt(index, colour)) continue;
+                filled[cell] = 1;
+                mean[cell * 3] = colour[0];
+                mean[cell * 3 + 1] = colour[1];
+                mean[cell * 3 + 2] = colour[2];
+            }
+        }
+        return { width, height, step, mean, filled, covered };
+    }
+
+    dispose(): void {
+        return;
     }
 
     meanColorAt(index: number, out: Float32Array): boolean {
@@ -141,7 +90,6 @@ export class Mosaic {
     }
 
     addFlat(tile: WarpTile): void {
-        this.markDirty(tile);
         for (let y = 0; y < tile.height; y++) {
             const row = this.row(tile.v0 + y);
             if (row < 0) continue;
@@ -156,17 +104,9 @@ export class Mosaic {
                 this.flatColor[index * 3 + 1] += tile.color[t * 3 + 1] * w;
                 this.flatColor[index * 3 + 2] += tile.color[t * 3 + 2] * w;
                 this.flatWeight[index] += w;
-                this.coverage[index] = 1;
-                if (!this.covered) {
-                    this.covered = { u0: column, v0: row, u1: column, v1: row };
-                } else {
-                    if (column < this.covered.u0) this.covered.u0 = column;
-                    if (column > this.covered.u1) this.covered.u1 = column;
-                    if (row < this.covered.v0) this.covered.v0 = row;
-                    if (row > this.covered.v1) this.covered.v1 = row;
-                }
             }
         }
+        this.markCoverage(tile);
     }
 
     private premultiply(tile: WarpTile): Float32Array {
@@ -328,7 +268,11 @@ export class Mosaic {
         return { data, width, height };
     }
 
-    render(useBands: boolean, overlay?: Mosaic | null, region?: CanvasBox | null): ImageData {
+    render(
+        useBands: boolean,
+        overlay?: MosaicSurface | null,
+        region?: CanvasBox | null,
+    ): ImageData {
         const box: CanvasBox = region ?? {
             u0: 0,
             v0: 0,
@@ -339,12 +283,11 @@ export class Mosaic {
         const height = box.v1 - box.v0 + 1;
         const out = new Uint8ClampedArray(width * height * 4);
         const sameShape =
-            overlay !== null &&
-            overlay !== undefined &&
+            overlay instanceof Mosaic &&
             overlay.width === this.width &&
             overlay.height === this.height &&
             overlay.bands === this.bands;
-        const extra = sameShape ? (overlay as Mosaic) : null;
+        const extra = sameShape ? overlay : null;
         const collapsed = useBands ? this.collapseRegion(extra, box).data : null;
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
@@ -370,21 +313,5 @@ export class Mosaic {
             }
         }
         return new ImageData(out, width, height);
-    }
-
-    boundingBox(overlay?: Mosaic | null): CanvasBox | null {
-        const extra =
-            overlay && overlay.width === this.width && overlay.height === this.height
-                ? overlay.covered
-                : null;
-        const mine = this.covered;
-        if (!mine) return extra ? { ...extra } : null;
-        if (!extra) return { ...mine };
-        return {
-            u0: Math.min(mine.u0, extra.u0),
-            v0: Math.min(mine.v0, extra.v0),
-            u1: Math.max(mine.u1, extra.u1),
-            v1: Math.max(mine.v1, extra.v1),
-        };
     }
 }

@@ -17,6 +17,8 @@ export interface BundleObservation {
     ay: number;
     bx: number;
     by: number;
+    scaleA?: number;
+    scaleB?: number;
 }
 
 export interface BundleProblem {
@@ -270,6 +272,7 @@ export class BundleAdjuster {
                 observation.by,
                 observation.ax,
                 observation.ay,
+                observation.scaleA ?? 1,
                 base,
                 residuals,
                 weights,
@@ -284,6 +287,7 @@ export class BundleAdjuster {
                 observation.ay,
                 observation.bx,
                 observation.by,
+                observation.scaleB ?? 1,
                 base + 2,
                 residuals,
                 weights,
@@ -302,6 +306,7 @@ export class BundleAdjuster {
         sy: number,
         tx: number,
         ty: number,
+        uncertainty: number,
         slot: number,
         residuals: Float64Array,
         weights: Float64Array | null,
@@ -322,9 +327,10 @@ export class BundleAdjuster {
         const ey = this.cy + focal * factor * ny - ty;
         residuals[slot] = ex;
         residuals[slot + 1] = ey;
-        const distance = Math.hypot(ex, ey);
+        const sigma = Math.max(1, uncertainty);
+        const distance = Math.hypot(ex, ey) / sigma;
         if (weights) {
-            const weight = distance <= HUBER_SIGMA ? 1 : HUBER_SIGMA / distance;
+            const weight = (distance <= HUBER_SIGMA ? 1 : HUBER_SIGMA / distance) / (sigma * sigma);
             weights[slot] = weight;
             weights[slot + 1] = weight;
         }

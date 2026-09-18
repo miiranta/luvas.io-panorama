@@ -44,7 +44,7 @@ export type WorkerResponse =
     | { kind: 'mosaic'; mosaic: MosaicPayload }
     | { kind: 'graph'; graph: GraphPayload }
     | { kind: 'preview'; epoch: number; preview: PreviewPayload | null }
-    | ({ kind: 'export' } & RasterPayload)
+    | { kind: 'export'; width: number; height: number; png: ArrayBuffer }
     | { kind: 'state'; state: PipelineState }
     | { kind: 'progress'; detail: string }
     | { kind: 'error'; message: string };

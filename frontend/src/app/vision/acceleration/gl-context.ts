@@ -75,6 +75,14 @@ export class GlContext {
         return this.gl.getExtension('EXT_color_buffer_float') !== null;
     }
 
+    get blendsFloat(): boolean {
+        return this.rendersFloat && this.gl.getExtension('EXT_float_blend') !== null;
+    }
+
+    get maxTextureSize(): number {
+        return Number(this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE)) || 4096;
+    }
+
     program(fragmentSource: string, uniformNames: readonly string[]): GlProgram | null {
         const gl = this.gl;
         const vertex = this.compile(gl.VERTEX_SHADER, QUAD_VERTEX);
@@ -199,4 +207,28 @@ export class GlContext {
         if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
         return shader;
     }
+}
+
+const GROWTH_STEP = 128;
+
+function roundUp(value: number): number {
+    return Math.ceil(value / GROWTH_STEP) * GROWTH_STEP;
+}
+
+export function growTarget(
+    context: GlContext,
+    existing: GlTarget | null,
+    width: number,
+    height: number,
+    format: 'float' | 'byte',
+): GlTarget | null {
+    if (existing && existing.width >= width && existing.height >= height) return existing;
+    const grownWidth = Math.max(roundUp(width), existing?.width ?? 0);
+    const grownHeight = Math.max(roundUp(height), existing?.height ?? 0);
+    context.release(existing);
+    const texture =
+        format === 'float'
+            ? context.floatTexture(grownWidth, grownHeight)
+            : context.byteTexture(grownWidth, grownHeight);
+    return context.target(texture, grownWidth, grownHeight);
 }
