@@ -33,3 +33,7 @@ export function sampleGrayBilinear(image: GrayImage, x: number, y: number): numb
     const bottom = data[y1 * width + x0] * (1 - ax) + data[y1 * width + x1] * ax;
     return top * (1 - ay) + bottom * ay;
 }
+
+export function imageCentre(size: number): number {
+    return (size - 1) / 2;
+}

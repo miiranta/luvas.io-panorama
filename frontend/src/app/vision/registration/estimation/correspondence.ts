@@ -9,6 +9,15 @@ export interface Correspondence {
     targetScale?: number;
 }
 
+export function localizationScale(point: Correspondence): number {
+    return Math.max(1, point.sourceScale ?? 1, point.targetScale ?? 1);
+}
+
+export function localizationWeight(point: Correspondence): number {
+    const scale = localizationScale(point);
+    return 1 / (scale * scale);
+}
+
 export const MIN_PAIRS: Record<ModelKind, number> = {
     translation: 1,
     similarity: 2,

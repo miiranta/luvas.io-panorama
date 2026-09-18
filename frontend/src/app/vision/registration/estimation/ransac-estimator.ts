@@ -1,10 +1,14 @@
 import { ModelParams } from '../../../core/models/params';
 import { Mat3, mat3Inverse } from '../../foundation/math/matrix3';
-import { Correspondence, MIN_PAIRS } from './correspondence';
+import { Correspondence, MIN_PAIRS, localizationScale } from './correspondence';
 import { fitModel, isPlausibleHomography } from './fit-model';
 import { symmetricTransferError } from './transfer-error';
 
 const SAMPLE_COVERAGE = 3;
+const REFINE_ROUNDS = 10;
+const SHRINK_ROUNDS = 4;
+const WIDENED_THRESHOLD = 2;
+const MIN_RETAINED = 0.5;
 
 function distinctSamples(count: number, size: number): number {
     let total = 1;
@@ -33,7 +37,7 @@ export class RansacEstimator {
         const kind = params.model;
         const sampleSize = MIN_PAIRS[kind];
         if (points.length < sampleSize) return null;
-        const threshold = params.ransacThreshold;
+        const limits = points.map((point) => params.ransacThreshold * localizationScale(point));
         let bestInliers: Uint8Array | null = null;
         let bestCount = 0;
         let bestError = Number.POSITIVE_INFINITY;
@@ -64,7 +68,7 @@ export class RansacEstimator {
             const inliers = new Uint8Array(points.length);
             for (let i = 0; i < points.length; i++) {
                 const e = symmetricTransferError(model, modelInverse, points[i]);
-                if (e <= threshold) {
+                if (e <= limits[i]) {
                     inliers[i] = 1;
                     count++;
                     error += e;
@@ -95,24 +99,11 @@ export class RansacEstimator {
         let inliers = bestInliers;
         let count = bestCount;
         if (params.refitOnInliers && count >= sampleSize) {
-            const inlierIndices: number[] = [];
-            for (let i = 0; i < inliers.length; i++) if (inliers[i]) inlierIndices.push(i);
-            const refined = fitModel(kind, points, inlierIndices);
-            if (refined && isPlausibleHomography(refined, kind, params.rejectSkew)) {
-                const refinedInverse = mat3Inverse(refined);
-                const nextInliers = new Uint8Array(points.length);
-                let nextCount = 0;
-                for (let i = 0; i < points.length; i++) {
-                    if (symmetricTransferError(refined, refinedInverse, points[i]) <= threshold) {
-                        nextInliers[i] = 1;
-                        nextCount++;
-                    }
-                }
-                if (nextCount >= count) {
-                    matrix = refined;
-                    inliers = nextInliers;
-                    count = nextCount;
-                }
+            const refined = this.refine(bestMatrix, points, limits, sampleSize);
+            if (refined && refined.count >= Math.max(sampleSize, bestCount * MIN_RETAINED)) {
+                matrix = refined.matrix;
+                inliers = refined.inliers;
+                count = refined.count;
             }
         }
         let errorSum = 0;
@@ -126,4 +117,57 @@ export class RansacEstimator {
             meanError: count === 0 ? Number.POSITIVE_INFINITY : errorSum / count,
         };
     }
+
+    private refine(
+        start: Mat3,
+        points: readonly Correspondence[],
+        limits: readonly number[],
+        sampleSize: number,
+    ): { matrix: Mat3; inliers: Uint8Array; count: number } | null {
+        const { model: kind, rejectSkew } = this.params;
+        let matrix = start;
+        let current = select(matrix, points, limits, WIDENED_THRESHOLD);
+        for (let round = 0; round < REFINE_ROUNDS; round++) {
+            if (current.count < sampleSize) return null;
+            const indices: number[] = [];
+            for (let i = 0; i < current.inliers.length; i++)
+                if (current.inliers[i]) indices.push(i);
+            const refined = fitModel(kind, points, indices);
+            if (!refined || !isPlausibleHomography(refined, kind, rejectSkew)) break;
+            const factor = Math.max(
+                1,
+                WIDENED_THRESHOLD - ((WIDENED_THRESHOLD - 1) * (round + 1)) / SHRINK_ROUNDS,
+            );
+            const next = select(refined, points, limits, factor);
+            const settled = factor === 1 && sameSet(next.inliers, current.inliers);
+            matrix = refined;
+            current = next;
+            if (settled) break;
+        }
+        const final = select(matrix, points, limits, 1);
+        return final.count >= sampleSize ? { matrix, ...final } : null;
+    }
+}
+
+function select(
+    matrix: Mat3,
+    points: readonly Correspondence[],
+    limits: readonly number[],
+    factor: number,
+): { inliers: Uint8Array; count: number } {
+    const inverse = mat3Inverse(matrix);
+    const inliers = new Uint8Array(points.length);
+    let count = 0;
+    for (let i = 0; i < points.length; i++) {
+        if (symmetricTransferError(matrix, inverse, points[i]) <= limits[i] * factor) {
+            inliers[i] = 1;
+            count++;
+        }
+    }
+    return { inliers, count };
+}
+
+function sameSet(a: Uint8Array, b: Uint8Array): boolean {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
 }

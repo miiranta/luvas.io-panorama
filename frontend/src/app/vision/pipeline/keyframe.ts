@@ -1,5 +1,5 @@
 import { Keypoint } from '../features/detection/keypoint';
-import { ColorImage } from '../foundation/imaging/image';
+import { ColorImage, imageCentre } from '../foundation/imaging/image';
 import { Mat3, mat3Identity } from '../foundation/math/matrix3';
 
 const ARCHIVE_QUALITY = 0.94;
@@ -38,11 +38,11 @@ export class Keyframe {
     }
 
     get centreX(): number {
-        return this.workWidth / 2;
+        return imageCentre(this.workWidth);
     }
 
     get centreY(): number {
-        return this.workHeight / 2;
+        return imageCentre(this.workHeight);
     }
 
     get hasComposeSource(): boolean {

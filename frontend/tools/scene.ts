@@ -114,15 +114,32 @@ export function scaleImage(image: ColorImage, targetWidth: number): ColorImage {
     const width = Math.max(32, Math.round(image.width * scale));
     const height = Math.max(32, Math.round(image.height * scale));
     const data = new Uint8ClampedArray(width * height * 4);
+    const stepX = image.width / width;
+    const stepY = image.height / height;
+    const sum = new Float64Array(3);
     for (let y = 0; y < height; y++) {
-        const sy = Math.min(image.height - 1, Math.round((y + 0.5) / scale - 0.5));
+        const y0 = y * stepY;
+        const y1 = y0 + stepY;
         for (let x = 0; x < width; x++) {
-            const sx = Math.min(image.width - 1, Math.round((x + 0.5) / scale - 0.5));
-            const src = (sy * image.width + sx) * 4;
+            const x0 = x * stepX;
+            const x1 = x0 + stepX;
+            sum.fill(0);
+            let area = 0;
+            for (let sy = Math.floor(y0); sy < Math.ceil(y1); sy++) {
+                const coverY = Math.min(y1, sy + 1) - Math.max(y0, sy);
+                for (let sx = Math.floor(x0); sx < Math.ceil(x1); sx++) {
+                    const weight = coverY * (Math.min(x1, sx + 1) - Math.max(x0, sx));
+                    const src = (sy * image.width + sx) * 4;
+                    sum[0] += image.data[src] * weight;
+                    sum[1] += image.data[src + 1] * weight;
+                    sum[2] += image.data[src + 2] * weight;
+                    area += weight;
+                }
+            }
             const dst = (y * width + x) * 4;
-            data[dst] = image.data[src];
-            data[dst + 1] = image.data[src + 1];
-            data[dst + 2] = image.data[src + 2];
+            data[dst] = sum[0] / area;
+            data[dst + 1] = sum[1] / area;
+            data[dst + 2] = sum[2] / area;
             data[dst + 3] = 255;
         }
     }

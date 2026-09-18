@@ -25,6 +25,7 @@ import { PairLink } from './pair-link';
 import { PairLinker, isFitted } from './pair-linker';
 
 const PAYLOAD_MARGIN = 4;
+const RELINK_DISTORTION = 0.01;
 const INTRUDER_REASON = 'not enough overlap with neighbouring cameras (intruder image)';
 
 interface Candidate {
@@ -41,6 +42,7 @@ export interface FrameOutcome {
 export class StitchPipeline {
     private params: PipelineParams = DEFAULT_PARAMS;
     private globalBundlePending = false;
+    private linkedDistortion = 0;
     private reporter: ProgressReporter = () => undefined;
     private readonly frames = new KeyframeStore();
     private readonly links = new LinkRegistry();
@@ -88,6 +90,7 @@ export class StitchPipeline {
 
     reset(): void {
         this.globalBundlePending = false;
+        this.linkedDistortion = 0;
         this.frames.clear();
         this.links.clear();
         this.cameras.reset();
@@ -103,20 +106,19 @@ export class StitchPipeline {
     }
 
     needsSettle(): boolean {
-        return this.compositor.needsSettle() || this.globalBundlePending;
+        return (
+            this.compositor.needsSettle() || this.globalBundlePending || this.distortionDrifted()
+        );
     }
 
     async settle(): Promise<boolean> {
         if (this.globalBundlePending) {
-            const active = this.frames.active;
-            if (active.length > 2) {
-                this.cameras.adjust(
-                    active,
-                    this.links,
-                    active.map((frame) => frame.id),
-                );
-            }
+            this.adjustAll();
             this.globalBundlePending = false;
+        }
+        if (this.distortionDrifted()) {
+            this.relink();
+            this.adjustAll();
         }
         if (!this.compositor.needsSettle()) return false;
         await this.compositor.recompose();
@@ -226,6 +228,7 @@ export class StitchPipeline {
     }
 
     async resolveFromScratch(): Promise<void> {
+        this.linkedDistortion = this.cameras.distortion;
         const all = this.frames.all.filter((frame) => frame.hasComposeSource);
         for (const frame of all) frame.rejected = false;
         const links: PairLink[] = [];
@@ -339,6 +342,36 @@ export class StitchPipeline {
         const newest = others[others.length - 1];
         if (!chosen.includes(newest)) chosen[chosen.length - 1] = newest;
         return chosen;
+    }
+
+    private adjustAll(): void {
+        const active = this.frames.active;
+        if (active.length <= 2) return;
+        this.cameras.adjust(
+            active,
+            this.links,
+            active.map((frame) => frame.id),
+        );
+    }
+
+    private distortionDrifted(): boolean {
+        return Math.abs(this.cameras.distortion - this.linkedDistortion) > RELINK_DISTORTION;
+    }
+
+    private relink(): void {
+        this.linkedDistortion = this.cameras.distortion;
+        const active = new Map(this.frames.active.map((frame) => [frame.id, frame]));
+        const links: PairLink[] = [];
+        for (const previous of this.links.all) {
+            const a = active.get(previous.a);
+            const b = active.get(previous.b);
+            if (!a || !b) continue;
+            const pair = this.linker.match(a, b);
+            if (!isFitted(pair)) continue;
+            const link = this.linker.link(a, b, pair);
+            if (link.inliers > 0) links.push(this.inheritIntensities(link));
+        }
+        this.links.replace(links);
     }
 
     private inheritIntensities(link: PairLink): PairLink {

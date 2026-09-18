@@ -1,4 +1,5 @@
 import { undistort } from '../../registration/alignment/lens-distortion';
+import { imageCentre } from '../../foundation/imaging/image';
 import { Mat3, mat3Transpose } from '../../foundation/math/matrix3';
 import { CanvasBox } from './canvas-box';
 import { CanvasGeometry, worldToCanvas } from './canvas-geometry';
@@ -20,8 +21,8 @@ export function computeFootprint(
     distortion = 0,
 ): Footprint {
     const rt = mat3Transpose(rotation);
-    const cx = sourceWidth / 2;
-    const cy = sourceHeight / 2;
+    const cx = imageCentre(sourceWidth);
+    const cy = imageCentre(sourceHeight);
     const out = new Float64Array(2);
     const lens = new Float64Array(2);
     const samples = 24;
@@ -126,8 +127,8 @@ function seesPole(
     const nx = (rotation[0] * wx + rotation[1] * wy + rotation[2] * wz) / z;
     const ny = (rotation[3] * wx + rotation[4] * wy + rotation[5] * wz) / z;
     const lens = 1 + distortion * (nx * nx + ny * ny);
-    const px = focal * nx * lens + sourceWidth / 2;
-    const py = focal * ny * lens + sourceHeight / 2;
+    const px = focal * nx * lens + imageCentre(sourceWidth);
+    const py = focal * ny * lens + imageCentre(sourceHeight);
     return px >= 0 && py >= 0 && px <= sourceWidth - 1 && py <= sourceHeight - 1;
 }
 

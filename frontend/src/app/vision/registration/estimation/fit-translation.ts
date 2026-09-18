@@ -1,5 +1,5 @@
 import { Mat3, mat3Identity } from '../../foundation/math/matrix3';
-import { Correspondence } from './correspondence';
+import { Correspondence, localizationWeight } from './correspondence';
 
 export function fitTranslation(
     points: readonly Correspondence[],
@@ -8,12 +8,15 @@ export function fitTranslation(
     if (indices.length < 1) return null;
     let tx = 0;
     let ty = 0;
+    let total = 0;
     for (const i of indices) {
-        tx += points[i].dx - points[i].sx;
-        ty += points[i].dy - points[i].sy;
+        const weight = localizationWeight(points[i]);
+        tx += weight * (points[i].dx - points[i].sx);
+        ty += weight * (points[i].dy - points[i].sy);
+        total += weight;
     }
     const m = mat3Identity();
-    m[2] = tx / indices.length;
-    m[5] = ty / indices.length;
+    m[2] = tx / total;
+    m[5] = ty / total;
     return m;
 }

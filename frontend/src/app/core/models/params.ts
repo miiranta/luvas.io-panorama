@@ -99,7 +99,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
     },
     model: {
         model: 'homography',
-        ransacThreshold: 3,
+        ransacThreshold: 2.5,
         ransacConfidence: 0.995,
         ransacMaxIterations: 2000,
         minInliers: 18,

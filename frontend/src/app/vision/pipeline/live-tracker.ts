@@ -12,6 +12,7 @@ const MIN_PREVIEW_KEYPOINTS = 8;
 
 export class LiveTracker {
     private lastReference = -1;
+    private newestSeen = -1;
 
     constructor(
         private readonly frames: KeyframeStore,
@@ -23,6 +24,10 @@ export class LiveTracker {
         const anchors = this.frames.active.filter((frame) => frame.keypoints.length > 0);
         const latest = anchors.at(-1);
         if (!latest) return null;
+        if (latest.id !== this.newestSeen) {
+            this.newestSeen = latest.id;
+            this.lastReference = latest.id;
+        }
         const { keypoints, descriptors } = this.features.extract(
             work,
             PREVIEW_KEYPOINTS,

@@ -1,7 +1,7 @@
 import { solveLinearSystem } from '../../foundation/math/gaussian-elimination';
 import { smallestEigenvector } from '../../foundation/math/jacobi-eigen';
 import { Mat3, mat3Inverse, mat3Multiply } from '../../foundation/math/matrix3';
-import { Correspondence } from './correspondence';
+import { Correspondence, localizationWeight } from './correspondence';
 import { hartleyNormalization } from './hartley-normalization';
 
 export function fitHomography(
@@ -17,6 +17,7 @@ export function fitHomography(
     const row = new Float64Array(9);
     for (let k = 0; k < indices.length; k++) {
         const p = points[indices[k]];
+        const weight = localizationWeight(p);
         const sx = ns.scale * (p.sx - ns.mx);
         const sy = ns.scale * (p.sy - ns.my);
         const dx = nd.scale * (p.dx - nd.mx);
@@ -28,7 +29,9 @@ export function fitHomography(
         row[6] = dx * sx;
         row[7] = dx * sy;
         row[8] = dx;
-        for (let i = 0; i < 9; i++) for (let j = 0; j < 9; j++) ata[i * 9 + j] += row[i] * row[j];
+        for (let i = 0; i < 9; i++) {
+            for (let j = 0; j < 9; j++) ata[i * 9 + j] += weight * row[i] * row[j];
+        }
         row.fill(0);
         row[3] = -sx;
         row[4] = -sy;
@@ -36,7 +39,9 @@ export function fitHomography(
         row[6] = dy * sx;
         row[7] = dy * sy;
         row[8] = dy;
-        for (let i = 0; i < 9; i++) for (let j = 0; j < 9; j++) ata[i * 9 + j] += row[i] * row[j];
+        for (let i = 0; i < 9; i++) {
+            for (let j = 0; j < 9; j++) ata[i * 9 + j] += weight * row[i] * row[j];
+        }
     }
     if (rows < 8) return null;
     return denormalize(Float64Array.from(smallestEigenvector(ata, 9)), ns.matrix, nd.matrix);

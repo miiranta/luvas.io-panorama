@@ -207,7 +207,7 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         group: 'model',
         key: 'ransacThreshold',
         label: 'RANSAC threshold',
-        hint: 'Maximum residual (px) for a pair to count as an inlier',
+        hint: 'Maximum symmetric transfer error (px) at full resolution; scaled by each keypoint pyramid scale',
         kind: 'range',
         min: 0.5,
         max: 12,

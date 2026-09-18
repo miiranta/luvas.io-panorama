@@ -1,6 +1,6 @@
 import { solveLinearSystem } from '../../foundation/math/gaussian-elimination';
 import { Mat3, mat3Identity } from '../../foundation/math/matrix3';
-import { Correspondence } from './correspondence';
+import { Correspondence, localizationWeight } from './correspondence';
 
 export function fitAffine(
     points: readonly Correspondence[],
@@ -11,14 +11,15 @@ export function fitAffine(
     const atb = new Float64Array(6);
     for (const i of indices) {
         const p = points[i];
+        const weight = localizationWeight(p);
         const rows = [
             [p.sx, p.sy, 1, 0, 0, 0, p.dx],
             [0, 0, 0, p.sx, p.sy, 1, p.dy],
         ];
         for (const r of rows) {
             for (let a = 0; a < 6; a++) {
-                for (let b = 0; b < 6; b++) ata[a * 6 + b] += r[a] * r[b];
-                atb[a] += r[a] * r[6];
+                for (let b = 0; b < 6; b++) ata[a * 6 + b] += weight * r[a] * r[b];
+                atb[a] += weight * r[a] * r[6];
             }
         }
     }

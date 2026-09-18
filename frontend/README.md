@@ -385,8 +385,16 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   orientação; distância de Hamming com `popcount`; ratio test `d₁/d₂ < 0,75` e checagem mútua.
 - **Modelo** (Aula 07 §8.1, `vision/registration/estimation/`) — DLT com normalização de Hartley resolvido pelo
   autovetor de menor autovalor de `AᵀA` (Jacobi); RANSAC com `N = log(1−p)/log(1−wᵏ)` adaptativo,
-  **erro de transferência simétrico** `√((d(Hx,x')² + d(H⁻¹x',x)²)/2)` (Hartley & Zisserman), reajuste
-  nos inliers e rejeição de homografias implausíveis (determinante, escala, cisalhamento).
+  **erro de transferência simétrico** `√((d(Hx,x')² + d(H⁻¹x',x)²)/2)` (Hartley & Zisserman) e rejeição
+  de homografias implausíveis (determinante, escala, cisalhamento). O limiar (2,5 px) vale para pontos
+  da resolução cheia e é multiplicado pela escala de pirâmide de cada par, porque o erro de
+  localização cresce com ela (p95 medido: 1,3 px na escala 1, 1,9 px na 1,5, 2,5 px na 2,25). O
+  modelo final sai de um **reajuste iterado** (LO-RANSAC): inliers colhidos com 2× o limiar em
+  torno do melhor modelo mínimo, DLT ponderado por `1/escala²` nesses inliers, novo inlier set com
+  a margem encolhendo até 1× e repetição até o conjunto parar de mudar. Contra a homografia
+  verdadeira, isso levou o erro médio de 0,32 para 0,24 px. Limiares abaixo de ~2,5 px pioram o
+  resultado com lente distorcida: antes de κ₁ ser estimado a homografia não explica a borda da
+  foto, o RANSAC fica só com o centro e a focal inicial sai errada (κ₁ = −0,2 com 2 px: 6° de erro).
 - **Focal e rotação** (Aula 08 §8.2.3) — com `K = diag(f,f,1)` centrada, a ortonormalidade das duas
   primeiras colunas de `R = K⁻¹HK` dá `f² = −(h₀₀h₀₁+h₁₀h₁₁)/(h₂₀h₂₁)` e
   `f² = (h₀₁²+h₁₁²−h₀₀²−h₁₀²)/(h₂₀²−h₂₁²)`; tomamos a mediana das estimativas de todos os pares. A
@@ -408,7 +416,11 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   distorção ao buscar cada pixel na foto. Com κ₁ estimado, o RANSAC, a focal a partir de H e a
   rotação inicial passam a usar os pontos **desdistorcidos** — a homografia entre pontos
   desdistorcidos é exata para câmera que gira —, enquanto o desenho na tela e as observações do
-  bundle continuam em pixels crus.
+  bundle continuam em pixels crus. Como as primeiras ligações foram ajustadas ainda com κ₁ = 0,
+  o refino ocioso (e a exportação) **refaz as ligações** quando κ₁ se afasta mais de 0,01 do valor
+  usado nelas e roda o bundle de novo (κ₁ = −0,2: erro de yaw de 1,27° para 0,3°). O centro óptico
+  é `(W − 1)/2` em coordenadas de índice de pixel, a mesma convenção nas resoluções de análise e
+  de composição e no shader.
 - **Composição** (Aula 08 §8.4, Aula 02 §3.5.5, Aula 04 §3.5) — cada pixel da tela gera um raio, o
   raio vai para a câmera por `R`, é distorcido por κ₁ e amostrado na fonte (warp inverso, sem
   buracos). Quando a tela reduz a foto, a amostragem usa **mipmaps** com nível escolhido pela

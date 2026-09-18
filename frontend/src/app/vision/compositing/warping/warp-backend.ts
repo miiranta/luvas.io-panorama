@@ -1,5 +1,5 @@
 import { CanvasGeometry } from './canvas-geometry';
-import { ColorImage } from '../../foundation/imaging/image';
+import { ColorImage, imageCentre } from '../../foundation/imaging/image';
 import { mipPyramidFor, sampleTrilinear } from './mip-pyramid';
 import { Mat3, mat3Identity } from '../../foundation/math/matrix3';
 import {
@@ -89,12 +89,13 @@ void main() {
     if (cam.z <= 1e-6) return;
     vec2 normalised = cam.xy / cam.z;
     float lens = 1.0 + uDistortion * dot(normalised, normalised);
-    float px = uFocal * normalised.x * lens + uSourceSize.x * 0.5;
-    float py = uFocal * normalised.y * lens + uSourceSize.y * 0.5;
+    vec2 centre = (uSourceSize - 1.0) * 0.5;
+    float px = uFocal * normalised.x * lens + centre.x;
+    float py = uFocal * normalised.y * lens + centre.y;
     if (px < 0.0 || py < 0.0 || px > uSourceSize.x - 1.0 || py > uSourceSize.y - 1.0) return;
     vec3 colour = texture(uSource, vec2((px + 0.5) / uSourceSize.x, (py + 0.5) / uSourceSize.y)).rgb;
     float edge = min(min(px, uSourceSize.x - 1.0 - px), min(py, uSourceSize.y - 1.0 - py));
-    vec2 offset = (vec2(px, py) - uSourceSize * 0.5) / uFocal;
+    vec2 offset = (vec2(px, py) - centre) / uFocal;
     float falloff = max(0.05, 1.0 + uVignetting * dot(offset, offset));
     fragColor = vec4(min(vec3(1.0), colour * uGain / falloff), min(1.0, (edge + 0.5) / uFeather));
 }`;
@@ -135,8 +136,8 @@ export const cpuWarpBackend: WarpBackend = {
             }
         }
         const projected = new Float32Array(width * height * 2);
-        const cx = source.width / 2;
-        const cy = source.height / 2;
+        const cx = imageCentre(source.width);
+        const cy = imageCentre(source.height);
         let pixels = 0;
         for (let y = 0; y < height; y++) {
             const cv = v0 + y + 0.5;

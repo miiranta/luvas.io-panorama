@@ -121,6 +121,10 @@ async function handle(request: WorkerRequest): Promise<void> {
                 break;
             }
             case 'export': {
+                if (pipeline.needsSettle()) {
+                    postState('refining alignment', -1);
+                    if (await pipeline.settle()) publishMosaic();
+                }
                 const image = await pipeline.exportImage();
                 if (image) {
                     post(

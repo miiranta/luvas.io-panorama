@@ -1,6 +1,6 @@
 import { solveLinearSystem } from '../../foundation/math/gaussian-elimination';
 import { Mat3, mat3Identity } from '../../foundation/math/matrix3';
-import { Correspondence } from './correspondence';
+import { Correspondence, localizationWeight } from './correspondence';
 
 export function fitSimilarity(
     points: readonly Correspondence[],
@@ -11,14 +11,15 @@ export function fitSimilarity(
     const atb = new Float64Array(4);
     for (const i of indices) {
         const p = points[i];
+        const weight = localizationWeight(p);
         const rows = [
             [p.sx, -p.sy, 1, 0, p.dx],
             [p.sy, p.sx, 0, 1, p.dy],
         ];
         for (const r of rows) {
             for (let a = 0; a < 4; a++) {
-                for (let b = 0; b < 4; b++) ata[a * 4 + b] += r[a] * r[b];
-                atb[a] += r[a] * r[4];
+                for (let b = 0; b < 4; b++) ata[a * 4 + b] += weight * r[a] * r[b];
+                atb[a] += weight * r[a] * r[4];
             }
         }
     }
