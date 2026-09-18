@@ -1,5 +1,5 @@
-import { Mat3 } from '../math/matrix3';
-import { opticalAxis } from '../math/so3';
+import { Mat3 } from '../foundation/math/matrix3';
+import { opticalAxis } from '../foundation/math/rotation';
 import { Keyframe } from './keyframe';
 
 const HOT_COMPOSE_FRAMES = 8;

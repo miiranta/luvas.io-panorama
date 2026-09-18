@@ -1,6 +1,6 @@
-import { Mat3, mat3Transpose } from '../src/app/vision/math/matrix3';
-import { ColorImage } from '../src/app/vision/imaging/image';
-import { undistort } from '../src/app/vision/geometry/lens';
+import { Mat3, mat3Transpose } from '../src/app/vision/foundation/math/matrix3';
+import { ColorImage } from '../src/app/vision/foundation/imaging/image';
+import { undistort } from '../src/app/vision/registration/alignment/lens-distortion';
 
 export function deg(value: number): number {
     return (value * Math.PI) / 180;

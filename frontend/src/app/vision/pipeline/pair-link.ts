@@ -1,5 +1,5 @@
-import { BundleObservation } from '../geometry/bundle-adjuster';
-import { Mat3 } from '../math/matrix3';
+import { BundleObservation } from '../registration/alignment/bundle-adjuster';
+import { Mat3 } from '../foundation/math/matrix3';
 
 export interface IntensitySample {
     ax: number;

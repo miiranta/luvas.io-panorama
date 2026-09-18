@@ -1,30 +1,36 @@
 import { PipelineParams } from '../../core/models/params';
-import { BlurBackend } from '../acceleration/blur-backend';
-import { WarpBackend } from '../acceleration/warp-backend';
+import { BlurBackend } from '../compositing/blending/blur-backend';
+import { WarpBackend } from '../compositing/warping/warp-backend';
+import { CanvasBox, alignDown, alignUp } from '../compositing/warping/canvas-box';
 import {
-    CanvasBox,
     CanvasGeometry,
-    alignDown,
-    alignUp,
     angularSpan,
     createCanvasGeometry,
-    unionFootprints,
-} from '../compositing/canvas-geometry';
-import { ExposureCompensator } from '../compositing/exposure';
-import { levelHorizon } from '../compositing/horizon';
-import { Mosaic } from '../compositing/mosaic';
-import { MosaicFactory, MosaicSurface } from '../compositing/mosaic-surface';
-import { VignettingSample, estimateVignetting, vignetteAt } from '../compositing/vignetting';
-import { ColorImage } from '../imaging/image';
-import { SeamFinder, SeamStats } from '../compositing/seam-finder';
-import { Warper } from '../compositing/warper';
-import { Mat3 } from '../math/matrix3';
-import { rotationAngleBetween } from '../math/so3';
+} from '../compositing/warping/canvas-geometry';
+import { unionFootprints } from '../compositing/warping/footprint';
+import { ExposureCompensator } from '../compositing/photometric/exposure-compensator';
+import { levelHorizon } from '../registration/alignment/level-horizon';
+import { CpuMosaic } from '../compositing/blending/cpu-mosaic';
+import { MosaicFactory, MosaicSurface } from '../compositing/blending/mosaic-surface';
+import {
+    VignettingSample,
+    estimateVignetting,
+    vignetteAt,
+} from '../compositing/photometric/vignetting';
+import { ColorImage } from '../foundation/imaging/image';
+import { SeamFinder, SeamStats } from '../compositing/seams/seam-finder';
+import { Warper } from '../compositing/warping/warper';
+import { Mat3 } from '../foundation/math/matrix3';
+import { rotationAngleBetween } from '../foundation/math/rotation';
 import { CameraSolver } from './camera-solver';
 import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
-import { EXPORT_TILE, ExportedImage, PanoramaExporter } from './panorama-exporter';
+import {
+    EXPORT_TILE,
+    ExportedImage,
+    PanoramaExporter,
+} from '../compositing/export/panorama-exporter';
 import { PairLink } from './pair-link';
 
 const STABLE_DEGREES = 0.2;
@@ -70,7 +76,7 @@ export class MosaicCompositor {
         private readonly cameras: CameraSolver,
         private readonly report: ProgressReporter = () => undefined,
         private readonly createMosaic: MosaicFactory = (width, height, bands, view) =>
-            new Mosaic(width, height, bands, view),
+            new CpuMosaic(width, height, bands, view),
     ) {}
 
     get isEmpty(): boolean {
@@ -187,6 +193,7 @@ export class MosaicCompositor {
     ): Promise<ExportedImage | null> {
         const frames = this.orderedFrames();
         if (frames.length === 0) return null;
+        this.prepareCanvas();
         const exporter = new PanoramaExporter({
             params: this.params,
             blur: this.blur,

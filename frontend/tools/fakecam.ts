@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
-import { mat3Multiply } from '../src/app/vision/math/matrix3';
-import { rotationFromAxisAngle } from '../src/app/vision/math/so3';
+import { mat3Multiply } from '../src/app/vision/foundation/math/matrix3';
+import { rotationFromAxisAngle } from '../src/app/vision/foundation/math/rotation';
 import { buildWorld, deg, paintMovingObject, renderView } from './scene';
 
 const width = 640;

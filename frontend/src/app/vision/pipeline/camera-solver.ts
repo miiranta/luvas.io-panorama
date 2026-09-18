@@ -1,7 +1,7 @@
 import { GlobalParams } from '../../core/models/params';
-import { BundleAdjuster, BundleObservation } from '../geometry/bundle-adjuster';
-import { relativeRotationFromHomography } from '../geometry/rotational-camera';
-import { Mat3, mat3Multiply, mat3Transpose } from '../math/matrix3';
+import { BundleAdjuster, BundleObservation } from '../registration/alignment/bundle-adjuster';
+import { relativeRotationFromHomography } from '../registration/alignment/rotational-camera';
+import { Mat3, mat3Multiply, mat3Transpose } from '../foundation/math/matrix3';
 import { Keyframe } from './keyframe';
 import { LinkRegistry } from './link-registry';
 import { PairLink } from './pair-link';
@@ -20,6 +20,7 @@ const NO_BUNDLE: BundleSummary = { before: 0, after: 0 };
 export class CameraSolver {
     private focalEstimate: number | null = null;
     private distortionEstimate = 0;
+    private focalRefined = false;
     private readonly adjuster = new BundleAdjuster();
 
     constructor(private readonly params: () => GlobalParams) {}
@@ -35,6 +36,7 @@ export class CameraSolver {
     reset(): void {
         this.focalEstimate = null;
         this.distortionEstimate = 0;
+        this.focalRefined = false;
     }
 
     focalFor(frame: { workWidth: number; workHeight: number }): number {
@@ -50,6 +52,8 @@ export class CameraSolver {
     }
 
     absorbFocals(links: readonly PairLink[], frame: Keyframe, blend: boolean): void {
+        if (!blend) this.focalRefined = false;
+        if (blend && this.focalRefined) return;
         const focals = links
             .filter((link) => link.verified && link.focal !== null)
             .map((link) => link.focal as number)
@@ -109,6 +113,7 @@ export class CameraSolver {
             frame.rotation = result.rotations[index];
         });
         this.focalEstimate = result.focal;
+        if (params.refineFocal) this.focalRefined = true;
         if (params.refineDistortion) this.distortionEstimate = result.distortion;
         return {
             before: result.initialError,

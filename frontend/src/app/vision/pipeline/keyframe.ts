@@ -1,6 +1,6 @@
-import { Keypoint } from '../features/keypoint';
-import { ColorImage } from '../imaging/image';
-import { Mat3, mat3Identity } from '../math/matrix3';
+import { Keypoint } from '../features/detection/keypoint';
+import { ColorImage } from '../foundation/imaging/image';
+import { Mat3, mat3Identity } from '../foundation/math/matrix3';
 
 const ARCHIVE_QUALITY = 0.94;
 
@@ -9,6 +9,8 @@ export class Keyframe {
     gain = 1;
     rejected = false;
     composedRotation: Mat3 | null = null;
+    readonly composeWidth: number;
+    readonly composeHeight: number;
     private archive: Blob | null = null;
 
     constructor(
@@ -23,6 +25,8 @@ export class Keyframe {
         rotation: Mat3 = mat3Identity(),
     ) {
         this.rotation = rotation;
+        this.composeWidth = compose?.width ?? 0;
+        this.composeHeight = compose?.height ?? 0;
     }
 
     static get canArchive(): boolean {
@@ -39,6 +43,10 @@ export class Keyframe {
 
     get centreY(): number {
         return this.workHeight / 2;
+    }
+
+    get hasComposeSource(): boolean {
+        return this.compose !== null || this.archive !== null;
     }
 
     get storedBytes(): number {

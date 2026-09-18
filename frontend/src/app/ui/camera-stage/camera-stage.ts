@@ -10,8 +10,8 @@ import {
     signal,
     viewChild,
 } from '@angular/core';
-import { CameraService } from '../../core/services/camera.service';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { CameraService } from '../../core/services/camera-service';
+import { StitcherService } from '../../core/services/stitcher-service';
 
 @Component({
     selector: 'app-camera-stage',

@@ -1,18 +1,18 @@
 import { inflateSync } from 'node:zlib';
 import { DEFAULT_PARAMS, PipelineParams } from '../src/app/core/models/params';
 import { StitchPipeline } from '../src/app/vision/pipeline/stitch-pipeline';
-import { Mat3, mat3Multiply, mat3Transpose } from '../src/app/vision/math/matrix3';
-import { rotationFromAxisAngle } from '../src/app/vision/math/so3';
+import { Mat3, mat3Multiply, mat3Transpose } from '../src/app/vision/foundation/math/matrix3';
+import { rotationFromAxisAngle } from '../src/app/vision/foundation/math/rotation';
 import {
     focalFromHomography,
     relativeRotationFromHomography,
-} from '../src/app/vision/geometry/rotational-camera';
+} from '../src/app/vision/registration/alignment/rotational-camera';
 import { buildWorld, deg, paintMovingObject, renderView, scaleImage } from './scene';
 import { FeatureExtractor } from '../src/app/vision/pipeline/feature-extractor';
-import { CornerDetector } from '../src/app/vision/features/corner-detector';
-import { DescriptorMatcher } from '../src/app/vision/features/descriptor-matcher';
-import { RansacEstimator } from '../src/app/vision/geometry/ransac';
-import { mat3Identity } from '../src/app/vision/math/matrix3';
+import { CornerDetector } from '../src/app/vision/features/detection/corner-detector';
+import { DescriptorMatcher } from '../src/app/vision/features/matching/descriptor-matcher';
+import { RansacEstimator } from '../src/app/vision/registration/estimation/ransac-estimator';
+import { mat3Identity } from '../src/app/vision/foundation/math/matrix3';
 
 function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: Uint8Array } {
     const bytes = new Uint8Array(buffer);

@@ -47,4 +47,4 @@ export type WorkerResponse =
     | { kind: 'export'; width: number; height: number; png: ArrayBuffer }
     | { kind: 'state'; state: PipelineState }
     | { kind: 'progress'; detail: string }
-    | { kind: 'error'; message: string };
+    | { kind: 'error'; message: string; request?: WorkerRequest['kind'] };

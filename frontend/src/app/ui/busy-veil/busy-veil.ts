@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { StitcherService } from '../../core/services/stitcher-service';
 
 @Component({
     selector: 'app-busy-veil',

@@ -1,10 +1,10 @@
 import { PipelineParams } from '../../core/models/params';
-import { BriefDescriptor } from '../features/brief-descriptor';
-import { CornerDetector } from '../features/corner-detector';
-import { Keypoint } from '../features/keypoint';
-import { grayPyramid } from '../imaging/gray-pyramid';
-import { ColorImage, toGray } from '../imaging/image';
-import { DESCRIPTOR_WORDS } from '../features/brief-descriptor';
+import { BriefDescriptor } from '../features/description/brief-descriptor';
+import { CornerDetector } from '../features/detection/corner-detector';
+import { Keypoint } from '../features/detection/keypoint';
+import { grayPyramid } from '../foundation/imaging/gray-pyramid';
+import { ColorImage, toGray } from '../foundation/imaging/image';
+import { DESCRIPTOR_WORDS } from '../features/description/brief-descriptor';
 
 export interface ExtractedFeatures {
     keypoints: Keypoint[];

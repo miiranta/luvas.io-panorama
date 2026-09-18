@@ -8,7 +8,7 @@ import {
     output,
     viewChild,
 } from '@angular/core';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { StitcherService } from '../../core/services/stitcher-service';
 import { ConnectionPayload } from '../../core/models/reports';
 
 @Component({

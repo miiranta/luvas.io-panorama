@@ -1,5 +1,5 @@
 import { PreviewPayload } from '../../core/models/reports';
-import { ColorImage } from '../imaging/image';
+import { ColorImage } from '../foundation/imaging/image';
 import { FeatureExtractor } from './feature-extractor';
 import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';

@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
-import { StitcherService } from './core/services/stitcher.service';
+import { StitcherService } from './core/services/stitcher-service';
 import { BusyVeil } from './ui/busy-veil/busy-veil';
 import { CameraStage } from './ui/camera-stage/camera-stage';
 import { ConfirmDialog } from './ui/confirm-dialog/confirm-dialog';

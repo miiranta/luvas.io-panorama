@@ -7,7 +7,7 @@ import {
     inject,
     viewChild,
 } from '@angular/core';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { StitcherService } from '../../core/services/stitcher-service';
 import { PreviewVector } from '../../core/models/reports';
 
 interface Overlay {

@@ -10,7 +10,9 @@ import {
     signal,
     viewChild,
 } from '@angular/core';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { StitcherService } from '../../core/services/stitcher-service';
+
+const REVOKE_DELAY_MS = 60_000;
 
 @Component({
     selector: 'app-panorama-layer',
@@ -73,7 +75,9 @@ export class PanoramaLayer {
             anchor.href = url;
             anchor.download = `panorama-${Date.now()}.png`;
             anchor.click();
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
+        } catch (error) {
+            this.stitcher.error.set(error instanceof Error ? error.message : String(error));
         } finally {
             this.saving.set(false);
         }

@@ -1,6 +1,6 @@
 import { GraphPayload } from '../../core/models/reports';
-import { GraphEdge, PoseGraph } from '../geometry/pose-graph';
-import { opticalAxis } from '../math/so3';
+import { GraphEdge, PoseGraph } from '../registration/alignment/pose-graph';
+import { opticalAxis, yawPitchDegrees } from '../foundation/math/rotation';
 import { Keyframe } from './keyframe';
 import { PairLink } from './pair-link';
 
@@ -66,18 +66,14 @@ export class LinkRegistry {
         if (frames.length === 0) return EMPTY_GRAPH;
         const graph = this.poseGraph(frames);
         return {
-            nodes: frames.map((frame, index) => {
-                const [x, y, z] = opticalAxis(frame.rotation);
-                return {
-                    id: frame.id,
-                    label: frame.label,
-                    yaw: (Math.atan2(x, z) * 180) / Math.PI,
-                    pitch: (Math.asin(Math.min(1, Math.max(-1, y))) * 180) / Math.PI,
-                    keypoints: frame.keypoints.length,
-                    rejected: frame.rejected,
-                    inMainComponent: graph.inMainComponent(index),
-                };
-            }),
+            nodes: frames.map((frame, index) => ({
+                id: frame.id,
+                label: frame.label,
+                ...yawPitchDegrees(frame.rotation),
+                keypoints: frame.keypoints.length,
+                rejected: frame.rejected,
+                inMainComponent: graph.inMainComponent(index),
+            })),
             edges: graph.edges.map((edge) => ({
                 ...edge,
                 a: frames[edge.a].id,

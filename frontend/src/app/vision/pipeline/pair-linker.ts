@@ -1,14 +1,14 @@
 import { PipelineParams } from '../../core/models/params';
 import { MatchRecord, PairReport } from '../../core/models/reports';
-import { DescriptorMatcher } from '../features/descriptor-matcher';
-import { BundleObservation } from '../geometry/bundle-adjuster';
-import { brownLoweVerified } from '../geometry/pose-graph';
-import { ModelFit, RansacEstimator } from '../geometry/ransac';
-import { focalFromHomography } from '../geometry/rotational-camera';
-import { undistort } from '../geometry/lens';
-import { Correspondence } from '../geometry/transform-model';
-import { ColorImage } from '../imaging/image';
-import { Mat3 } from '../math/matrix3';
+import { DescriptorMatcher } from '../features/matching/descriptor-matcher';
+import { BundleObservation } from '../registration/alignment/bundle-adjuster';
+import { brownLoweVerified } from '../registration/alignment/pose-graph';
+import { ModelFit, RansacEstimator } from '../registration/estimation/ransac-estimator';
+import { focalFromHomography } from '../registration/alignment/rotational-camera';
+import { undistort } from '../registration/alignment/lens-distortion';
+import { Correspondence } from '../registration/estimation/correspondence';
+import { ColorImage } from '../foundation/imaging/image';
+import { Mat3 } from '../foundation/math/matrix3';
 import { Keyframe } from './keyframe';
 import { IntensitySample, PairLink } from './pair-link';
 

@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, output } from '@angular/core';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { StitcherService } from '../../core/services/stitcher-service';
 
 interface NodeDot {
     id: number;

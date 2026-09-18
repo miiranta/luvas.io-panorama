@@ -8,7 +8,7 @@ import {
 } from '@angular/core';
 import { ParamGroup } from '../../core/models/params';
 import { PARAM_SPECS, ParamSpec } from '../../core/models/param-spec';
-import { StitcherService } from '../../core/services/stitcher.service';
+import { StitcherService } from '../../core/services/stitcher-service';
 
 const GROUP_TITLES: Record<ParamGroup, string> = {
     detect: 'Detection',

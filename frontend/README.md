@@ -120,7 +120,7 @@ prévia acontecem fora da captura, no tempo ocioso.
 
 A prévia usa uma tela de 360° com `canvasWidth` px (1792 por padrão), então um panorama de 100°
 ocupa só ~500 px dela. Exportar essa tela era o motivo do PNG sair borrado. A exportação é um
-passo à parte (`vision/pipeline/panorama-exporter.ts`), no mesmo desenho de resoluções do
+passo à parte (`vision/compositing/export/panorama-exporter.ts`), no mesmo desenho de resoluções do
 `stitching_detailed` do OpenCV:
 
 1. **escala nativa** — a tela é escolhida para amostrar as fotos na resolução delas: `2π·f` px por
@@ -133,7 +133,7 @@ passo à parte (`vision/pipeline/panorama-exporter.ts`), no mesmo desenho de res
    128 px (maior que o suporte da pirâmide). Cada ladrilho compõe só as fotos cujo footprint o toca,
    com a máscara global ampliada bilinearmente, na GPU quando disponível, e só o miolo é mantido;
 4. **PNG em fluxo** — ao fim de cada faixa de ladrilhos as linhas vão para um codificador PNG
-   próprio no worker (`vision/imaging/png-writer.ts`: filtro Paeth, `CompressionStream('deflate')`,
+   próprio no worker (`vision/compositing/export/png-writer.ts`: filtro Paeth, `CompressionStream('deflate')`,
    CRC dos chunks). A imagem inteira nunca existe num buffer nem num `<canvas>`, então os limites
    de área de canvas dos navegadores (16,7 MP no Safari do iOS) não se aplicam.
 
@@ -171,7 +171,7 @@ detalhes importam:
 ### Aceleração por GPU
 
 Cinco etapas rodam em **WebGL2** dentro do worker, todas num único contexto compartilhado
-(`vision/acceleration/gl-context.ts`):
+(`vision/foundation/gpu/gl-context.ts`); o backend de cada etapa mora na pasta da própria etapa:
 
 | etapa | shader | conferência contra a CPU |
 |---|---|---|
@@ -290,33 +290,56 @@ parâmetros) é compartilhado com a UI.
 
 ```
 src/app/
-├─ core/
-│  ├─ models/        params · param-spec · reports · worker-protocol
-│  └─ services/      CameraService · StitcherService
-├─ ui/               um componente por pasta (ts/html/scss): *-layer sobre a câmera,
-│                    *-sheet painel lateral, *-dialog modal
-├─ workers/          stitch.worker — fila de mensagens → StitchPipeline
-└─ vision/
-   ├─ math/          álgebra 3×3, Jacobi, SO(3)
-   ├─ imaging/       imagem, convolução, gaussiana, Sobel, mipmaps
-   ├─ features/      tensor de estrutura, cantos, BRIEF, casamento
-   ├─ geometry/      modelos de transformação, RANSAC, câmera rotacional, lente, bundle, grafo
-   ├─ compositing/   superfícies, warp, costura, exposição, vinheta, horizonte, pirâmide, mosaico
-   ├─ acceleration/  WebGL2 e seleção medida entre GPU e CPU
-   └─ pipeline/      orquestração incremental
+├─ core/                      estado global da app e ponte com o worker
+│  ├─ models/                 params · param-spec · reports · worker-protocol
+│  ├─ services/               CameraService · StitcherService
+│  └─ workers/                stitch.worker — fila de mensagens → StitchPipeline
+├─ ui/                        um componente por pasta (ts/html/scss): *-layer sobre a câmera,
+│                             *-sheet painel lateral, *-dialog modal
+└─ vision/                    algoritmos, sem Angular
+   ├─ foundation/             base usada por todas as etapas
+   │  ├─ math/                matrizes 3×3, rotações, Jacobi, eliminação gaussiana, Cholesky
+   │  ├─ imaging/             imagem, filtro gaussiano, Sobel, pirâmide de cinza
+   │  └─ gpu/                 contexto WebGL2 e seleção medida entre GPU e CPU
+   ├─ features/               características (Aula 05)
+   │  ├─ detection/           tensor de estrutura, Harris, Shi-Tomasi, FAST, NMS, ANMS, sub-pixel
+   │  ├─ description/         orientação dominante, BRIEF
+   │  └─ matching/            Hamming, ratio test + checagem cruzada
+   ├─ registration/           alinhamento geométrico (Aulas 07–08)
+   │  ├─ estimation/          Hartley, DLT, afim, similaridade, translação, erro de transferência, RANSAC
+   │  └─ alignment/           câmera rotacional, lente κ₁, bundle adjustment, grafo, horizonte
+   ├─ compositing/            composição (Aula 08)
+   │  ├─ warping/             plano / cilindro / esfera, pegadas, mipmaps, warp inverso
+   │  ├─ photometric/         compensação de exposição, vinheta
+   │  ├─ seams/               costura
+   │  ├─ blending/            pirâmide gaussiana/laplaciana, mosaico multibanda (CPU e GPU)
+   │  └─ export/              exportação em blocos e PNG
+   └─ pipeline/               orquestração incremental das etapas acima
 ```
 
-| pasta | classes / funções principais | conceito | aula |
+`vision/` tem um nível por fase do fluxo (base → características → registro → composição) e, dentro
+de cada fase, uma pasta por etapa das aulas, e cada método tem seu arquivo, com o nome do método ou da
+classe que ele implementa (`harris.ts`, `fit-homography.ts`, `bundle-adjuster.ts`). Quando uma
+etapa roda na GPU, o backend fica na pasta da etapa (`detection/detect-backend.ts`,
+`matching/match-backend.ts`, `warping/warp-backend.ts`, `blending/gpu-mosaic.ts`); só a
+infraestrutura WebGL2 compartilhada fica em `foundation/gpu/`.
+
+| pasta | arquivos (um método cada) | conceito | aula |
 |---|---|---|---|
-| `math/` | `matrix3`, `decomposition` (Jacobi, sistema linear), `so3` (eixo-ângulo, rotação mais próxima) | transformações, rotações | 01 |
-| `imaging/` | `toGray`, `gaussianKernel`, `blurGray`, `sobelGradients`, `mipPyramidFor` + `sampleTrilinear`, `grayPyramid`, `PngWriter` | convolução, filtro gaussiano, gradiente, pré-filtro antes de reduzir, pirâmide de escalas | 02–05 |
-| `features/` | `structureTensorMaps`, `CornerDetector` (Harris / Shi-Tomasi / FAST, NMS, ANMS, sub-pixel, orientação), `BriefDescriptor`, `DescriptorMatcher` (ratio test + cruzada) | detecção, descrição e casamento de características | 05 |
-| `geometry/` | `transform-model` (translação → homografia, DLT normalizado), `RansacEstimator` | transformações 2D, homografia, RANSAC | 07 |
-| `geometry/` | `rotational-camera` (K, f a partir de H, H → R), `lens` (κ₁), `BundleAdjuster`, `PoseGraph` (MST, componentes, referência) | modelo de câmera, distorção radial, alinhamento global, ordem das fotos | 01, 08 |
-| `compositing/` | `canvas-geometry` (plano / cilindro / esfera), `Warper`, `SeamFinder`, `ExposureCompensator`, `estimateVignetting`, `levelHorizon`, `Mosaic` | projeção, warp inverso, costura, compensação de exposição e vinheta | 01, 08 |
-| `compositing/` | `pyramid`, `MosaicGrid` (janela, emenda de 360°, cobertura), `Mosaic.addPyramidBands` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
-| `acceleration/` | `GlContext`, `SeparableBlur`, `BackendSelector`, `RoutedBackend`, backends de warp / pirâmide / detecção / casamento, `GpuMosaic` + `MosaicBackend` | engenharia (fora das aulas) | — |
-| `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `MosaicCompositor`, `PanoramaExporter`, `LiveTracker`, `AcceleratorSuite` | fluxo do enunciado, etapas 1–6 | T1 |
+| `foundation/math/` | `matrix3`, `rotation` (Rodrigues, rotação mais próxima, eixo óptico), `jacobi-eigen`, `gaussian-elimination`, `cholesky` | transformações, rotações, álgebra linear | 01 |
+| `foundation/imaging/` | `image` (`toGray`, bilinear), `gaussian-blur`, `sobel-gradients`, `gray-pyramid` | convolução, filtro gaussiano, gradiente, pirâmide de escalas | 02–05 |
+| `foundation/gpu/` | `gl-context`, `separable-blur`, `backend-selector`, `accelerator-suite` | engenharia (fora das aulas) | — |
+| `features/detection/` | `structure-tensor`, `harris`, `shi-tomasi`, `fast-segment-test`, `non-maximum-suppression`, `adaptive-suppression` (SSC), `sub-pixel-refinement`, `corner-detector` | detecção de cantos | 05 |
+| `features/description/` | `dominant-orientation`, `brief-descriptor` | descritores binários invariantes à rotação | 05 |
+| `features/matching/` | `hamming-distance`, `descriptor-matcher` (ratio test + cruzada) | casamento de características | 05 |
+| `registration/estimation/` | `correspondence`, `hartley-normalization`, `fit-homography` (DLT), `fit-affine`, `fit-similarity`, `fit-translation`, `fit-model`, `transfer-error`, `ransac-estimator` | transformações 2D, homografia, RANSAC | 07 |
+| `registration/alignment/` | `rotational-camera` (K, f a partir de H, H → R), `lens-distortion` (κ₁), `bundle-adjuster`, `pose-graph` (MST, componentes, referência), `level-horizon` | modelo de câmera, distorção radial, alinhamento global, ordem das fotos, endireitamento | 01, 08 |
+| `compositing/warping/` | `canvas-geometry` (plano / cilindro / esfera), `canvas-box`, `footprint`, `canvas-transfer`, `mip-pyramid`, `warper`, `warp-tile` | projeção, warp inverso com pré-filtro | 01, 04, 08 |
+| `compositing/photometric/` | `exposure-compensator`, `vignetting` | compensação de ganho e de vinheta | 08 |
+| `compositing/seams/` | `seam-finder` | costura de menor custo | 08 |
+| `compositing/blending/` | `gaussian-pyramid`, `mosaic-surface`, `mosaic-grid` (janela, emenda de 360°, cobertura), `cpu-mosaic`, `gpu-mosaic` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
+| `compositing/export/` | `panorama-exporter`, `png-writer` | exportação em resolução cheia | — |
+| `pipeline/` | `StitchPipeline`, `Keyframe`, `KeyframeStore`, `FeatureExtractor`, `PairLinker`, `LinkRegistry`, `CameraSolver`, `MosaicCompositor`, `LiveTracker` | fluxo do enunciado, etapas 1–6 | T1 |
 
 `StitchPipeline.addFrame` lê como o enunciado: `features.extract` → `linkToNeighbours` (casamento
 + RANSAC contra as câmeras vizinhas) → `cameras.placeRelativeTo` → `cameras.adjust` (bundle) →
@@ -325,7 +348,9 @@ guarda as fotos e o orçamento de memória, `PairLinker` transforma um par em ar
 `LinkRegistry` guarda as arestas e responde o grafo, `CameraSolver` guarda a focal e as rotações,
 `MosaicCompositor` guarda os acumuladores e `LiveTracker` faz o casamento ao vivo.
 
-Convenções de nome: arquivos e pastas em `kebab-case`; classes em `PascalCase` com substantivo do
+Convenções de nome: arquivos e pastas em `kebab-case`, com o nome do método ou da classe principal
+(`CornerDetector` → `corner-detector.ts`, `CameraService` → `camera-service.ts`; só o worker mantém
+o sufixo `.worker.ts` exigido pelo build); classes em `PascalCase` com substantivo do
 papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou quantidade calculada
 (`levelHorizon`, `focalFromHomography`); tipos que atravessam o worker terminam em `Payload`
 (mensagem), `Report` (relatório) ou `Record` (item de lista). A escala de `z-index` fica em
@@ -333,11 +358,12 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
 
 ### Matemática por etapa
 
-- **Detecção** (Aula 05 §7.1.1, `vision/features/`) — `A = Σ w·[[Ix², IxIy],[IxIy, Iy²]]` com σ_d
+- **Detecção** (Aula 05 §7.1.1, `vision/features/detection/`) — `A = Σ w·[[Ix², IxIy],[IxIy, Iy²]]` com σ_d
   para a derivada e σ_i para a integração (σ_i > σ_d, como em Schmid et al.); `R = det(A) − α·tr(A)²`
   ou `min λ` (Shi-Tomasi); limiar relativo ao pico; NMS por dilatação separável (máximo em janela
-  `(2r+1)²` em O(r) por pixel); ANMS por cobertura de quadrados (SSC, Bailo et al. 2018) com busca
-  binária do raio, O(n log n) em vez de O(n²); refino sub-pixel ajustando a **quadrática 2D
+  `(2r+1)²` em O(r) por pixel); ANMS por cobertura de quadrados (SSC, Bailo et al. 2018) (grade de lado
+  `r/√2`, então cada célula guarda no máximo um ponto) e busca binária do **maior** raio que ainda
+  mantém a cota de pontos, O(n log n) em vez de O(n²); refino sub-pixel ajustando a **quadrática 2D
   completa** (com o termo cruzado `∂²R/∂x∂y`) e tomando o vértice.
 - **Multiescala** (Aula 05 §7.1.1, "procurar cantos em todas as escalas"; desenho do ORB) — pirâmide
   de 3 níveis com razão 1,5, cada nível pré-filtrado antes de reduzir (Aula 04); o mesmo detector
@@ -348,7 +374,7 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   (peso `1/s²`, a "incerteza do ponto" da Aula 07 §8.1.1).
 - **Descrição e casamento** — orientação dominante por histograma de gradientes; BRIEF rodado pela
   orientação; distância de Hamming com `popcount`; ratio test `d₁/d₂ < 0,75` e checagem mútua.
-- **Modelo** (Aula 07 §8.1, `vision/geometry/`) — DLT com normalização de Hartley resolvido pelo
+- **Modelo** (Aula 07 §8.1, `vision/registration/estimation/`) — DLT com normalização de Hartley resolvido pelo
   autovetor de menor autovalor de `AᵀA` (Jacobi); RANSAC com `N = log(1−p)/log(1−wᵏ)` adaptativo,
   **erro de transferência simétrico** `√((d(Hx,x')² + d(H⁻¹x',x)²)/2)` (Hartley & Zisserman), reajuste
   nos inliers e rejeição de homografias implausíveis (determinante, escala, cisalhamento).
@@ -360,7 +386,12 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   reprojeção **nos dois sentidos** de cada correspondência, com erro robusto de **Huber (σ = 2 px)**
   e a covariância a priori do artigo (`σ_θ = π/16`, `σ_f = f̄/10`) como amortecimento. As derivadas
   em relação às rotações são **analíticas** (regra da cadeia pela projeção e pela distorção); as de
-  `f` e κ₁ são diferenças centrais. Conferido contra diferenças finitas (erro relativo 1e-4).
+  `f` e κ₁ são diferenças centrais. Conferido contra diferenças finitas (erro relativo 1e-4). O
+  Jacobiano é esparso (cada resíduo toca só as duas câmeras do par, a focal e κ₁: 8 colunas), então
+  `JᵀWJ` é acumulada só nessas entradas e o sistema amortecido é resolvido por **Cholesky** (com
+  eliminação gaussiana de reserva): 40 câmeras e 7 mil correspondências convergem em ~260 ms.
+  Depois que o bundle refinou a focal, fotos novas não a misturam mais com a mediana das
+  homografias.
 - **Distorção radial** (Aula 01 §2.1.5, Aula 08 §8.2.1) — um termo, `d = n·(1 + κ₁|n|²)` em
   coordenadas normalizadas pela focal. κ₁ é um parâmetro compartilhado do bundle (a partir de 3
   câmeras, a priori σ = 0,1): as observações ficam em pixels crus, o ponto de origem é
@@ -428,10 +459,10 @@ tela ficam em `/tmp/e2e`.
 | Etapa 1 — coleta com sobreposição e objeto móvel | captura na própria app; `npm run fakecam` gera uma cena com objeto móvel para teste |
 | Etapa 2 — dois detectores comparados, escala e orientação | `detector` no painel (Harris / Shi-Tomasi / FAST); card ampliado desenha escala e orientação |
 | Etapa 3 — FLANN/BF, ratio test, antes e depois | força bruta em Hamming + ratio test; vetores ao vivo sobre a câmera e card com reprovadas tracejadas |
-| Etapa 4 — ordenação automática sem EXIF, matriz/grafo, intrusa rejeitada | `vision/geometry/pose-graph.ts`, overlay ⓘ, botão *reordenar* (`resolveFromScratch`) |
-| Etapa 5 — homografia por RANSAC, taxa de inliers, erro de reprojeção | `vision/geometry/ransac.ts`; popup de comparação e overlay ⓘ reportam inliers, taxa e erro |
-| Etapa 6 — composição, blending, deghosting | `vision/compositing/`: feather, multibanda, costura geodésica, pixels inconsistentes |
-| X1 — ajuste global em vez de encadeamento | bundle adjustment em janela durante a captura e global no tempo ocioso (`vision/geometry/bundle-adjuster.ts`) |
+| Etapa 4 — ordenação automática sem EXIF, matriz/grafo, intrusa rejeitada | `vision/registration/alignment/pose-graph.ts`, overlay ⓘ, botão *reordenar* (`resolveFromScratch`) |
+| Etapa 5 — homografia por RANSAC, taxa de inliers, erro de reprojeção | `vision/registration/estimation/ransac-estimator.ts`; popup de comparação e overlay ⓘ reportam inliers, taxa e erro |
+| Etapa 6 — composição, blending, deghosting | `vision/compositing/seams/`, `vision/compositing/blending/`: feather, multibanda, costura geodésica, pixels inconsistentes |
+| X1 — ajuste global em vez de encadeamento | bundle adjustment em janela durante a captura e global no tempo ocioso (`vision/registration/alignment/bundle-adjuster.ts`) |
 | X2 — 360° com projeção cilíndrica/esférica | `surface` no painel (padrão plano); cilindro cobre 360° e a esfera 360°×180° |
 | X3 — compensação de exposição | ganhos por imagem estimados nas sobreposições, com a vinheta removida antes |
 | X4 — comparação com referência pronta | **não feito**: não há `cv2.Stitcher` no navegador; a comparação precisa ser externa |

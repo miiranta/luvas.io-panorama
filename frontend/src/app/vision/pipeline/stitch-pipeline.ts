@@ -9,10 +9,10 @@ import {
     PreviewPayload,
     StageTimings,
 } from '../../core/models/reports';
-import { ColorImage } from '../imaging/image';
-import { Mat3, mat3Identity } from '../math/matrix3';
-import { axisAngleFromRotation, rotationAngleBetween } from '../math/so3';
-import { AcceleratorSuite } from './accelerator-suite';
+import { ColorImage } from '../foundation/imaging/image';
+import { Mat3, mat3Identity } from '../foundation/math/matrix3';
+import { rotationAngleBetween, yawPitchDegrees } from '../foundation/math/rotation';
+import { AcceleratorSuite } from '../foundation/gpu/accelerator-suite';
 import { CameraSolver } from './camera-solver';
 import { FeatureExtractor } from './feature-extractor';
 import { Keyframe } from './keyframe';
@@ -20,7 +20,7 @@ import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
 import { LiveTracker } from './live-tracker';
 import { MosaicCompositor, ProgressReporter } from './mosaic-compositor';
-import { ExportedImage } from './panorama-exporter';
+import { ExportedImage } from '../compositing/export/panorama-exporter';
 import { PairLink } from './pair-link';
 import { PairLinker, isFitted } from './pair-linker';
 
@@ -211,13 +211,9 @@ export class StitchPipeline {
         await this.compositor.integrate();
         timings.compose = performance.now() - composing;
 
-        const [pitch, yaw] = axisAngleFromRotation(frame.rotation).map(
-            (radians) => (radians * 180) / Math.PI,
-        );
         Object.assign(report, {
             focal: this.cameras.focal ?? 0,
-            yaw,
-            pitch,
+            ...yawPitchDegrees(frame.rotation),
             bundleBefore: bundle.before,
             bundleAfter: bundle.after,
         });
