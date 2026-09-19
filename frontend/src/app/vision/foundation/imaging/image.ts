@@ -14,6 +14,10 @@ export interface ColorImage {
     data: Uint8ClampedArray<ArrayBuffer>;
 }
 
+export type Rgb = readonly [number, number, number];
+
+export const UNIT_RGB: Rgb = [1, 1, 1];
+
 export function luma(red: number, green: number, blue: number): number {
     return 0.299 * red + 0.587 * green + 0.114 * blue;
 }

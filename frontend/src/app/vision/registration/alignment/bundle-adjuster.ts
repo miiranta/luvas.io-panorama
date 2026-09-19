@@ -41,7 +41,6 @@ export interface BundleResult {
     rotations: Mat3[];
     focal: number;
     distortion: number;
-    initialError: number;
     finalError: number;
 }
 
@@ -72,6 +71,10 @@ function cross(ax: number, ay: number, az: number, axis: number, out: Float64Arr
     out[0] = -ay;
     out[1] = ax;
     out[2] = 0;
+}
+
+function clampDistortion(value: number): number {
+    return Math.min(MAX_DISTORTION, Math.max(-MAX_DISTORTION, value));
 }
 
 function forEachDirection(
@@ -157,12 +160,10 @@ export class BundleAdjuster {
             this.residuals,
             this.weights,
         );
-        const initialError = this.rootMeanSquare();
         const finish = (): BundleResult => ({
             rotations,
             focal: this.focal,
             distortion: this.distortion,
-            initialError,
             finalError: this.rootMeanSquare(),
         });
         if (this.paramCount === 0 || residualCount < this.paramCount || iterations === 0) {
@@ -176,31 +177,7 @@ export class BundleAdjuster {
         let lambda = 1e-3;
         for (let iteration = 0; iteration < iterations; iteration++) {
             this.buildJacobian(rotations);
-            const normal = new Float64Array(this.paramCount * this.paramCount);
-            const gradient = new Float64Array(this.paramCount);
-            for (let r = 0; r < residualCount; r++) {
-                const weight = this.weights[r];
-                if (weight === 0) continue;
-                const base = r * ROW_SLOTS;
-                for (let a = 0; a < ROW_SLOTS; a++) {
-                    const column = this.columns[base + a];
-                    if (column < 0) continue;
-                    const weighted = weight * this.jacobian[base + a];
-                    if (weighted === 0) continue;
-                    gradient[column] -= weighted * this.residuals[r];
-                    for (let b = 0; b < ROW_SLOTS; b++) {
-                        const other = this.columns[base + b];
-                        if (other < column) continue;
-                        normal[column * this.paramCount + other] +=
-                            weighted * this.jacobian[base + b];
-                    }
-                }
-            }
-            for (let a = 0; a < this.paramCount; a++) {
-                for (let b = 0; b < a; b++) {
-                    normal[a * this.paramCount + b] = normal[b * this.paramCount + a];
-                }
-            }
+            const { normal, gradient } = this.normalEquations(residualCount);
             const prior = this.priorDiagonal();
             let improved = false;
             for (let attempt = 0; attempt < MAX_ATTEMPTS && !improved; attempt++) {
@@ -213,30 +190,14 @@ export class BundleAdjuster {
                     lambda *= 10;
                     continue;
                 }
-                const candidate = rotations.map((r) => Float64Array.from(r) as Mat3);
-                for (let camera = 0; camera < candidate.length; camera++) {
-                    const slot = this.freeSlot[camera];
-                    if (slot < 0) continue;
-                    candidate[camera] = nearestRotation(
-                        mat3Multiply(
-                            rotationFromAxisAngle(delta[slot], delta[slot + 1], delta[slot + 2]),
-                            candidate[camera],
-                        ),
-                    );
-                }
+                const candidate = this.rotatedBy(rotations, delta);
                 const candidateFocal =
                     this.focalParam >= 0
                         ? Math.max(MIN_FOCAL, this.focal + delta[this.focalParam])
                         : this.focal;
                 const candidateDistortion =
                     this.distortionParam >= 0
-                        ? Math.min(
-                              MAX_DISTORTION,
-                              Math.max(
-                                  -MAX_DISTORTION,
-                                  this.distortion + delta[this.distortionParam],
-                              ),
-                          )
+                        ? clampDistortion(this.distortion + delta[this.distortionParam])
                         : this.distortion;
                 const candidateCost = this.evaluate(
                     candidate,
@@ -266,6 +227,54 @@ export class BundleAdjuster {
             if (!improved) break;
         }
         return finish();
+    }
+
+    private normalEquations(residualCount: number): {
+        normal: Float64Array;
+        gradient: Float64Array;
+    } {
+        const size = this.paramCount;
+        const normal = new Float64Array(size * size);
+        const gradient = new Float64Array(size);
+        for (let r = 0; r < residualCount; r++) {
+            const weight = this.weights[r];
+            if (weight === 0) continue;
+            this.accumulateRow(r * ROW_SLOTS, weight, this.residuals[r], normal, gradient);
+        }
+        for (let a = 0; a < size; a++) {
+            for (let b = 0; b < a; b++) normal[a * size + b] = normal[b * size + a];
+        }
+        return { normal, gradient };
+    }
+
+    private accumulateRow(
+        base: number,
+        weight: number,
+        residual: number,
+        normal: Float64Array,
+        gradient: Float64Array,
+    ): void {
+        for (let a = 0; a < ROW_SLOTS; a++) {
+            const column = this.columns[base + a];
+            if (column < 0) continue;
+            const weighted = weight * this.jacobian[base + a];
+            if (weighted === 0) continue;
+            gradient[column] -= weighted * residual;
+            for (let b = 0; b < ROW_SLOTS; b++) {
+                const other = this.columns[base + b];
+                if (other < column) continue;
+                normal[column * this.paramCount + other] += weighted * this.jacobian[base + b];
+            }
+        }
+    }
+
+    private rotatedBy(rotations: readonly Mat3[], delta: Float64Array): Mat3[] {
+        return rotations.map((rotation, camera) => {
+            const slot = this.freeSlot[camera];
+            if (slot < 0) return Float64Array.from(rotation) as Mat3;
+            const step = rotationFromAxisAngle(delta[slot], delta[slot + 1], delta[slot + 2]);
+            return nearestRotation(mat3Multiply(step, rotation));
+        });
     }
 
     private priorDiagonal(): Float64Array {

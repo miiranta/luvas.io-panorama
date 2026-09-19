@@ -22,9 +22,9 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm test -- --watch=false           # 90 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
+npm test -- --watch=false           # 96 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
 npm run typecheck                   # tipos da app, do worker, dos testes e das ferramentas
-npm run verify                      # 82 checagens numéricas contra ground truth sintético
+npm run verify                      # 90 checagens numéricas contra ground truth sintético (yaw e pitch recuperados)
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
 npm run e2e                         # 29 checagens ponta a ponta em Chrome headless
 ```
@@ -103,10 +103,12 @@ mostrou primeiro (218 ms na 1ª foto → 4533 ms na 25ª). A solução separa o 
   nativa das fotos (veja *Exportação*).
 
 O ponto central é que **a prévia é um acumulador de tamanho fixo**, não uma lista de camadas: uma
-tela na superfície escolhida (plano por padrão, cilindro ou esfera equirretangular) guardando
+tela na superfície escolhida (automática por padrão: plano, cilindro ou esfera equirretangular) guardando
 `Σw·I` e `Σw` por banda da pirâmide. A memória da prévia depende da resolução escolhida, nunca do
-número de fotos, e cada foto só toca o próprio footprint angular. Para varreduras largas troque a
-superfície para cilíndrica ou esférica no painel — o plano estoura perto de 90°.
+número de fotos, e cada foto só toca o próprio footprint angular. No modo `auto` a superfície é
+escolhida pela extensão angular das fotos, já com o horizonte nivelado: plano enquanto couber em
+~100°×84°, cilindro até 360°×92°, esfera acima disso — a mais simples que contém a varredura, como
+o `choose-surface` do Hugin/PTGui. O painel ainda permite fixar qualquer uma das três.
 
 ### Custo por foto (medido, `node tools/profile.mjs`, RTX 4070)
 
@@ -184,7 +186,7 @@ Cinco etapas rodam em **WebGL2** dentro do worker, todas num único contexto com
 
 | etapa | shader | conferência contra a CPU |
 |---|---|---|
-| warp | raio da tela → câmera → distorção κ₁ → amostragem com **mipmaps** (trilinear) → ganho e vinheta; saída RGBA8 | erro médio < 1,5 nível de cinza, máscara < 0,02 |
+| warp | raio da tela → câmera → distorção κ₁ → amostragem com **mipmaps** (bicúbica no nível 0, bilinear nos demais) → ganho RGB e vinheta; saída RGBA8 | erro médio < 1,5 nível de cinza, máscara < 0,02 |
 | mosaico | acumuladores em texturas `RGBA32F` com mistura aditiva (`EXT_float_blend`): redução da pirâmide, bandas laplacianas acumuladas na resolução de cada nível, reconstrução, amostras para a costura | renders e amostras iguais à CPU (média < 0,75, máximo ≤ 6), inclusive numa janela que cruza a emenda de 360° |
 | pirâmide da mistura | redução binomial 5×5 com decimação por 2 em `RGBA32F` (cor·m e m), `texelFetch` | erro médio < 0,75 |
 | detecção | gaussiana σ_d → Sobel → produtos `Ix², Iy², IxIy` → gaussiana σ_i → Harris / Shi-Tomasi | pico ±5 %, erro médio ≤ 1 % do pico |
@@ -338,14 +340,14 @@ infraestrutura WebGL2 compartilhada fica em `foundation/gpu/`.
 | pasta | arquivos (um método cada) | conceito | aula |
 |---|---|---|---|
 | `foundation/math/` | `matrix3`, `rotation` (Rodrigues, rotação mais próxima, eixo óptico), `jacobi-eigen`, `gaussian-elimination`, `cholesky`, `median` | transformações, rotações, álgebra linear | 01 |
-| `foundation/imaging/` | `image` (`toGray`, centro óptico), `bilinear`, `gaussian-blur`, `sobel-gradients`, `gray-pyramid` | convolução, filtro gaussiano, gradiente, pirâmide de escalas | 02–05 |
+| `foundation/imaging/` | `image` (`toGray`, centro óptico), `bilinear`, `bicubic`, `gaussian-blur`, `sobel-gradients`, `gray-pyramid` | convolução, filtro gaussiano, gradiente, pirâmide de escalas | 02–05 |
 | `foundation/gpu/` | `gl-context`, `separable-blur`, `backend-selector`, `accelerator-suite` | engenharia (fora das aulas) | — |
 | `features/detection/` | `structure-tensor`, `harris`, `shi-tomasi`, `fast-segment-test`, `non-maximum-suppression`, `adaptive-suppression` (SSC), `sub-pixel-refinement`, `corner-detector` | detecção de cantos | 05 |
 | `features/description/` | `dominant-orientation`, `brief-descriptor` | descritores binários invariantes à rotação | 05 |
 | `features/matching/` | `hamming-distance`, `descriptor-matcher` (ratio test + cruzada) | casamento de características | 05 |
 | `registration/estimation/` | `correspondence`, `hartley-normalization`, `fit-homography` (DLT), `fit-affine`, `fit-similarity`, `fit-translation`, `fit-model`, `transfer-error`, `ransac-estimator` | transformações 2D, homografia, RANSAC | 07 |
 | `registration/alignment/` | `rotational-camera` (K, f a partir de H, H → R), `lens-distortion` (κ₁), `bundle-adjuster`, `pose-graph` (MST, componentes, referência), `level-horizon` | modelo de câmera, distorção radial, alinhamento global, ordem das fotos, endireitamento | 01, 08 |
-| `compositing/warping/` | `canvas-geometry` (plano / cilindro / esfera), `canvas-box`, `footprint`, `canvas-transfer`, `mip-pyramid`, `warper`, `warp-tile` | projeção, warp inverso com pré-filtro | 01, 04, 08 |
+| `compositing/warping/` | `canvas-geometry` (plano / cilindro / esfera), `choose-surface`, `canvas-box`, `footprint`, `canvas-transfer`, `mip-pyramid`, `warper`, `warp-tile` | projeção, warp inverso com pré-filtro | 01, 04, 08 |
 | `compositing/photometric/` | `exposure-compensator`, `vignetting` | compensação de ganho e de vinheta | 08 |
 | `compositing/seams/` | `seam-finder` | costura de menor custo | 08 |
 | `compositing/blending/` | `gaussian-pyramid`, `mosaic-surface`, `mosaic-grid` (janela, emenda de 360°, cobertura), `cpu-mosaic`, `gpu-mosaic` | pirâmide gaussiana/laplaciana e mistura multibanda | 02, 04, 08 |
@@ -373,12 +375,12 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 
 **vision/foundation/** — base usada por todas as etapas
 - `math/matrix3.ts` — álgebra de matrizes 3×3; `rotation.ts` — rotações (Rodrigues, rotação mais próxima,
-  ângulo entre rotações, eixo óptico, yaw/pitch); `jacobi-eigen.ts` — autovalores de matriz simétrica;
+  ângulo entre rotações, eixo óptico, yaw); `jacobi-eigen.ts` — autovalores de matriz simétrica;
   `gaussian-elimination.ts` — sistema linear com pivoteamento; `cholesky.ts` — sistema simétrico
   definido positivo; `median.ts` — mediana; `angles.ts` — radianos para graus.
 - `cache/lru-cache.ts` — cache LRU com aviso de descarte (texturas da detecção, fotos da exportação).
 - `imaging/image.ts` — tipos de imagem, luminância (`luma`) e centro óptico; `bilinear.ts` — interpolação
-  bilinear para qualquer número de canais; `gaussian-blur.ts` — filtro gaussiano separável;
+  bilinear para qualquer número de canais; `bicubic.ts` — interpolação bicúbica de Keys; `gaussian-blur.ts` — filtro gaussiano separável;
   `sobel-gradients.ts` — gradiente de Sobel; `gray-pyramid.ts` — pirâmide de escalas para detecção.
 - `gpu/gl-context.ts` — contexto WebGL2 compartilhado, programas e alvos; `separable-blur.ts` —
   gaussiana na GPU; `backend-selector.ts` — calibra GPU contra CPU e escolhe; `accelerator-suite.ts`
@@ -409,8 +411,9 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 - `warping/canvas-geometry.ts` — superfícies plano/cilindro/esfera; `canvas-box.ts` — caixas e
   alinhamento à pirâmide; `footprint.ts` — região de cada foto na tela (incluindo polos e a emenda de
   360°); `canvas-transfer.ts` — mudança de resolução da tela; `mip-pyramid.ts` — mipmaps e amostragem
-  trilinear; `warper.ts` — recorta a região e chama o backend; `warp-backend.ts` — warp inverso em CPU e
-  GPU; `warp-tile.ts` — tipo do bloco.
+  bicúbica/trilinear; `choose-surface.ts` — escolhe a superfície no modo `auto`; `warper.ts` —
+  recorta a região e chama o backend; `warp-backend.ts` — warp inverso em CPU e GPU; `warp-tile.ts`
+  — tipo do bloco.
 - `photometric/exposure-compensator.ts` — ganhos de exposição; `vignetting.ts` — modelo e estimativa de
   vinheta.
 - `seams/seam-finder.ts` — costura de menor custo e rampa a partir dela.
@@ -507,12 +510,19 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
 - **Composição** (Aula 08 §8.4, Aula 02 §3.5.5, Aula 04 §3.5) — cada pixel da tela gera um raio, o
   raio vai para a câmera por `R`, é distorcido por κ₁ e amostrado na fonte (warp inverso, sem
   buracos). Quando a tela reduz a foto, a amostragem usa **mipmaps** com nível escolhido pela
-  derivada local do mapeamento (o pré-filtro antes de decimar da Aula 04); quando amplia, bilinear.
+  derivada local do mapeamento (o pré-filtro antes de decimar da Aula 04); o nível mais fino é
+  interpolado com o kernel **bicúbico de Keys** (a = −0,5) e os demais bilinearmente, mesclados
+  pela fração do nível, então a transição é contínua. Contra uma câmera sintética que integra a
+  área do pixel, a bicúbica ganha +0,3–0,4 dB de PSNR sobre a bilinear em deslocamentos subpixel e
+  em ampliação 2×. CPU e shader usam o mesmo kernel (`texelFetch` 4×4) e o mesmo LOD, calculado de
+  `dFdx`/`dFdy` antes de qualquer `return` para as derivadas serem definidas.
   Multibanda por **pirâmide laplaciana** de Burt & Adelson: cada foto vira pirâmide gaussiana
   (binomial 5×5, decimação por 2) e cada banda é acumulada **na própria resolução** da pirâmide
   (tiles alinhados a múltiplos de 64 px para as grades coincidirem); a imagem é reconstruída
   expandindo do nível mais grosso ao mais fino só na região coberta.
-- **Exposição e vinheta** (Aula 08 §8.4, Brown & Lowe §6) — ganhos por imagem minimizando
+- **Exposição e vinheta** (Aula 08 §8.4, Brown & Lowe §6) — ganhos por imagem **e por canal RGB**
+  (como o `ChannelsCompensator` do OpenCV, que também corrige o balanço de branco entre fotos),
+  cada canal minimizando
   `½ ΣΣ N_ij((g_i Ī_ij − g_j Ī_ji)²/σ_N² + (1 − g_i)²/σ_g²)` com os valores do artigo
   (`σ_N = 10`, `σ_g = 0,1`) e `N_ij` a área de sobreposição. A soma é sobre pares **ordenados**, então
   ao derivar em `g_i` o termo de dados entra duas vezes e o de prior uma:
@@ -546,6 +556,8 @@ zoom), renderiza vistas com rotação conhecida e confere o pipeline contra o gr
 - exportação amostrada acima da prévia e dentro do teto de megapixels, e exportação em ladrilhos de
   256 px idêntica à de um ladrilho único (PNG decodificado e comparado pixel a pixel);
 - bundle adjustment reduzindo o erro de reprojeção de 7–41 px para ~0,9 px;
+- ganhos recuperados como `1/exposição` (erro < 4 %) e, com fotos tingidas por balanço de branco
+  diferente, como `1/tinta` em cada canal (erro < 3 %), estáveis após reordenar;
 - imagem intrusa de outra cena rejeitada (4–5 inliers contra ~70 dos pares válidos);
 - objeto móvel detectado como pixels inconsistentes na sobreposição;
 - custo por foto estável com N crescente e no máximo 5 pares avaliados por foto.
@@ -575,8 +587,8 @@ tela ficam em `/tmp/e2e`.
 | Etapa 5 — homografia por RANSAC, taxa de inliers, erro de reprojeção | `vision/registration/estimation/ransac-estimator.ts`; popup de comparação e overlay ⓘ reportam inliers, taxa e erro |
 | Etapa 6 — composição, blending, deghosting | `vision/compositing/seams/`, `vision/compositing/blending/`: feather, multibanda, costura geodésica, pixels inconsistentes |
 | X1 — ajuste global em vez de encadeamento | bundle adjustment em janela durante a captura e global no tempo ocioso (`vision/registration/alignment/bundle-adjuster.ts`) |
-| X2 — 360° com projeção cilíndrica/esférica | `surface` no painel (padrão plano); cilindro cobre 360° e a esfera 360°×180° |
-| X3 — compensação de exposição | ganhos por imagem estimados nas sobreposições, com a vinheta removida antes |
+| X2 — 360° com projeção cilíndrica/esférica | `surface` no painel (padrão `auto`, escolhida pela extensão da varredura); cilindro cobre 360° e a esfera 360°×180° |
+| X3 — compensação de exposição | ganhos por imagem e por canal RGB estimados nas sobreposições, com a vinheta removida antes |
 | X4 — comparação com referência pronta | **não feito**: não há `cv2.Stitcher` no navegador; a comparação precisa ser externa |
 
 ## Limites conhecidos

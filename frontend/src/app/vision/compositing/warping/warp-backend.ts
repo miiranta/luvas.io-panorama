@@ -1,8 +1,8 @@
 import { CanvasGeometry } from './canvas-geometry';
 import { distortFactor } from '../../registration/alignment/lens-distortion';
 import { vignetteAt } from '../photometric/vignetting';
-import { ColorImage, imageCenter } from '../../foundation/imaging/image';
-import { mipPyramidFor, sampleTrilinear } from './mip-pyramid';
+import { ColorImage, Rgb, UNIT_RGB, imageCenter } from '../../foundation/imaging/image';
+import { mipPyramidFor, sampleMipmapped } from './mip-pyramid';
 import { Mat3, mat3Identity, mat3Multiply } from '../../foundation/math/matrix3';
 import {
     Backend,
@@ -23,7 +23,7 @@ export interface WarpRequest {
     focal: number;
     distortion: number;
     vignetting: number;
-    gain: number;
+    gain: Rgb;
     feather: number;
     u0: number;
     v0: number;
@@ -54,7 +54,7 @@ uniform float uCylinderHalf;
 uniform float uFocal;
 uniform float uDistortion;
 uniform float uVignetting;
-uniform float uGain;
+uniform vec3 uGain;
 uniform float uFeather;
 uniform int uSurface;
 uniform int uWraps;
@@ -79,27 +79,60 @@ vec3 surfaceRay(float u, float v) {
     );
 }
 
+vec4 keysWeights(float t) {
+    float t2 = t * t;
+    float t3 = t2 * t;
+    return vec4(
+        -0.5 * t3 + t2 - 0.5 * t,
+        1.5 * t3 - 2.5 * t2 + 1.0,
+        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+        0.5 * t3 - 0.5 * t2
+    );
+}
+
+vec3 sampleBicubic(vec2 p) {
+    ivec2 last = ivec2(uSourceSize) - 1;
+    vec2 origin = floor(p);
+    vec4 weightsX = keysWeights(p.x - origin.x);
+    vec4 weightsY = keysWeights(p.y - origin.y);
+    ivec2 base = ivec2(origin) - 1;
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < 4; j++) {
+        vec3 line = vec3(0.0);
+        for (int i = 0; i < 4; i++) {
+            ivec2 texel = clamp(base + ivec2(i, j), ivec2(0), last);
+            line += texelFetch(uSource, texel, 0).rgb * weightsX[i];
+        }
+        sum += line * weightsY[j];
+    }
+    return sum;
+}
+
+vec3 sampleMipmapped(vec2 p, float lod) {
+    vec2 uv = (p + 0.5) / uSourceSize;
+    if (lod >= 1.0) return textureLod(uSource, uv, lod).rgb;
+    return mix(sampleBicubic(p), textureLod(uSource, uv, 1.0).rgb, lod);
+}
+
 void main() {
     fragColor = vec4(0.0);
     float raw = uTileOrigin.x + gl_FragCoord.x - 0.5;
-    float rawV = uTileOrigin.y + gl_FragCoord.y - 0.5;
-    if (uWraps == 0 && (raw < 0.0 || raw >= uCanvasSize.x)) return;
     float cu = mod(mod(raw, uCanvasSize.x) + uCanvasSize.x, uCanvasSize.x) + 0.5;
-    float cv = rawV + 0.5;
-    vec3 ray = uOrientation * surfaceRay(cu, cv);
-    vec3 cam = uRotation * ray;
-    if (cam.z <= 1e-6) return;
-    vec2 normalized = cam.xy / cam.z;
+    float cv = uTileOrigin.y + gl_FragCoord.y;
+    vec3 cam = uRotation * (uOrientation * surfaceRay(cu, cv));
+    vec2 normalized = cam.xy / max(cam.z, 1e-6);
     float lens = 1.0 + uDistortion * dot(normalized, normalized);
     vec2 center = (uSourceSize - 1.0) * 0.5;
-    float px = uFocal * normalized.x * lens + center.x;
-    float py = uFocal * normalized.y * lens + center.y;
-    if (px < 0.0 || py < 0.0 || px > uSourceSize.x - 1.0 || py > uSourceSize.y - 1.0) return;
-    vec3 color = texture(uSource, vec2((px + 0.5) / uSourceSize.x, (py + 0.5) / uSourceSize.y)).rgb;
-    float edge = min(min(px, uSourceSize.x - 1.0 - px), min(py, uSourceSize.y - 1.0 - py));
-    vec2 offset = (vec2(px, py) - center) / uFocal;
+    vec2 p = uFocal * normalized * lens + center;
+    float spread = max(length(dFdx(p)), length(dFdy(p)));
+    if (uWraps == 0 && (raw < 0.0 || raw >= uCanvasSize.x)) return;
+    if (cam.z <= 1e-6) return;
+    if (any(lessThan(p, vec2(0.0))) || any(greaterThan(p, uSourceSize - 1.0))) return;
+    vec3 color = sampleMipmapped(p, log2(max(spread, 1.0)));
+    float edge = min(min(p.x, uSourceSize.x - 1.0 - p.x), min(p.y, uSourceSize.y - 1.0 - p.y));
+    vec2 offset = (p - center) / uFocal;
     float falloff = max(0.05, 1.0 + uVignetting * dot(offset, offset));
-    fragColor = vec4(min(vec3(1.0), color * uGain / falloff), min(1.0, (edge + 0.5) / uFeather));
+    fragColor = vec4(clamp(color * uGain / falloff, 0.0, 1.0), min(1.0, (edge + 0.5) / uFeather));
 }`;
 
 export const cpuWarpBackend: WarpBackend = {
@@ -181,7 +214,7 @@ export const cpuWarpBackend: WarpBackend = {
                 const px = projected[index * 2];
                 if (Number.isNaN(px)) continue;
                 const py = projected[index * 2 + 1];
-                sampleTrilinear(
+                sampleMipmapped(
                     levels,
                     px,
                     py,
@@ -191,10 +224,10 @@ export const cpuWarpBackend: WarpBackend = {
                 );
                 const ox = (px - cx) / focal;
                 const oy = (py - cy) / focal;
-                const scale = gain / vignetteAt(ox * ox + oy * oy, vignetting);
-                color[index * 3] = Math.min(255, sample[0] * scale);
-                color[index * 3 + 1] = Math.min(255, sample[1] * scale);
-                color[index * 3 + 2] = Math.min(255, sample[2] * scale);
+                const falloff = vignetteAt(ox * ox + oy * oy, vignetting);
+                for (let c = 0; c < 3; c++) {
+                    color[index * 3 + c] = clampByte((sample[c] * gain[c]) / falloff);
+                }
                 const edge = Math.min(Math.min(px, edgeX - px), Math.min(py, edgeY - py));
                 mask[index] = Math.min(1, (edge + 0.5) / feather);
             }
@@ -202,6 +235,10 @@ export const cpuWarpBackend: WarpBackend = {
         return { color, mask, pixels };
     },
 };
+
+function clampByte(value: number): number {
+    return Math.min(255, Math.max(0, value));
+}
 
 function span(
     projected: Float32Array,
@@ -291,7 +328,7 @@ class GpuWarpBackend implements WarpBackend {
             gl.uniform1f(uniforms['uFocal'], request.focal);
             gl.uniform1f(uniforms['uDistortion'], request.distortion);
             gl.uniform1f(uniforms['uVignetting'], request.vignetting);
-            gl.uniform1f(uniforms['uGain'], request.gain);
+            gl.uniform3f(uniforms['uGain'], ...request.gain);
             gl.uniform1f(uniforms['uFeather'], Math.max(1, request.feather));
             gl.uniform1i(uniforms['uSurface'], SURFACE_CODE[geometry.surface] ?? 0);
             gl.uniform1i(uniforms['uWraps'], geometry.surface === 'planar' ? 0 : 1);
@@ -414,7 +451,7 @@ function calibrationRequest(side: number): WarpRequest {
         focal: canvas / 2.4,
         distortion: -0.08,
         vignetting: -0.2,
-        gain: 1,
+        gain: UNIT_RGB,
         feather: 16,
         u0: Math.round((canvas - side) / 2),
         v0: Math.round((canvas - side) / 2),

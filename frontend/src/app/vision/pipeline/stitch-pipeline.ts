@@ -11,7 +11,7 @@ import {
 } from '../../core/models/reports';
 import { ColorImage } from '../foundation/imaging/image';
 import { Mat3, mat3Identity } from '../foundation/math/matrix3';
-import { rotationDegreesBetween, yawDegrees } from '../foundation/math/rotation';
+import { rotationDegreesBetween } from '../foundation/math/rotation';
 import { AcceleratorSuite } from '../foundation/gpu/accelerator-suite';
 import { CameraSolver } from './camera-solver';
 import { FeatureExtractor } from './feature-extractor';
@@ -200,7 +200,7 @@ export class StitchPipeline {
         this.links.add(...links);
         this.globalBundlePending = true;
         const adjusting = performance.now();
-        const bundle = this.cameras.adjust(
+        const reprojectionError = this.cameras.adjust(
             this.frames.active,
             this.links,
             this.bundleFreeIds(frame),
@@ -213,9 +213,7 @@ export class StitchPipeline {
 
         Object.assign(report, {
             focal: this.cameras.focal ?? 0,
-            yaw: yawDegrees(frame.rotation),
-            bundleBefore: bundle.before,
-            bundleAfter: bundle.after,
+            reprojectionError,
         });
         const stats = this.compositor.statsFor(frame.id);
         if (stats) {
@@ -286,7 +284,7 @@ export class StitchPipeline {
             distortion: this.cameras.distortion,
             vignetting: this.compositor.vignetting,
             frames: this.frameCount,
-            surface: this.params.compose.surface,
+            surface: this.compositor.geometry?.surface ?? 'planar',
         };
     }
 
@@ -312,7 +310,7 @@ export class StitchPipeline {
         for (const neighbor of this.neighbors(frame)) {
             const pair = this.linker.match(frame, neighbor);
             const link = isFitted(pair) ? this.linker.link(frame, neighbor, pair) : null;
-            const pairReport = this.linker.report(neighbor, pair, link);
+            const pairReport = this.linker.report(pair, link);
             const candidate = { frame: neighbor, matches: pair.matches, report: pairReport };
             report.pairs.push(pairReport);
             if (!closest || pairReport.inliers > closest.report.inliers) closest = candidate;
@@ -373,26 +371,17 @@ export class StitchPipeline {
         if (link.intensities.length > 0) return link;
         const previous = this.links.between(link.a, link.b);
         if (!previous || previous.intensities.length === 0) return link;
-        if (previous.a === link.a) {
-            return {
-                ...link,
-                intensities: previous.intensities,
-                meanIntensityA: previous.meanIntensityA,
-                meanIntensityB: previous.meanIntensityB,
-            };
-        }
+        if (previous.a === link.a) return { ...link, intensities: previous.intensities };
         return {
             ...link,
             intensities: previous.intensities.map((sample) => ({
                 ax: sample.bx,
                 ay: sample.by,
-                intensityA: sample.intensityB,
+                colorA: sample.colorB,
                 bx: sample.ax,
                 by: sample.ay,
-                intensityB: sample.intensityA,
+                colorB: sample.colorA,
             })),
-            meanIntensityA: previous.meanIntensityB,
-            meanIntensityB: previous.meanIntensityA,
         };
     }
 
@@ -417,10 +406,8 @@ export class StitchPipeline {
             reason: '',
             keypoints: frame.keypoints.length,
             focal: this.cameras.focal ?? 0,
-            yaw: 0,
             pairs: [],
-            bundleBefore: 0,
-            bundleAfter: 0,
+            reprojectionError: 0,
             overlapPixels: 0,
             inconsistentPixels: 0,
             coveragePercent: 0,

@@ -52,10 +52,31 @@ function stageFor(request: WorkerRequest): string {
 
 pipeline.setReporter((stage, progress) => postState(stage, progress));
 
+function messageOf(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
 function publishMosaic(): void {
     const mosaic = pipeline.mosaicPayload();
     if (mosaic) post({ kind: 'mosaic', mosaic }, [mosaic.pixels]);
     post({ kind: 'graph', graph: pipeline.graph() });
+}
+
+async function refineAlignment(): Promise<void> {
+    if (!pipeline.needsSettle()) return;
+    postState('refining alignment', -1);
+    if (await pipeline.settle()) publishMosaic();
+}
+
+async function exportPanorama(): Promise<void> {
+    await refineAlignment();
+    const image = await pipeline.exportImage();
+    if (!image) {
+        post({ kind: 'error', message: 'nothing to export', request: 'export' });
+        return;
+    }
+    const { width, height, png } = image;
+    post({ kind: 'export', width, height, png }, [png]);
 }
 
 async function handle(request: WorkerRequest): Promise<void> {
@@ -106,43 +127,21 @@ async function handle(request: WorkerRequest): Promise<void> {
                 break;
             }
             case 'export': {
-                if (pipeline.needsSettle()) {
-                    postState('refining alignment', -1);
-                    if (await pipeline.settle()) publishMosaic();
-                }
-                const image = await pipeline.exportImage();
-                if (image) {
-                    post(
-                        {
-                            kind: 'export',
-                            width: image.width,
-                            height: image.height,
-                            png: image.png,
-                        },
-                        [image.png],
-                    );
-                } else {
-                    post({ kind: 'error', message: 'nothing to export', request: 'export' });
-                }
+                await exportPanorama();
                 break;
             }
         }
     } catch (error) {
-        post({
-            kind: 'error',
-            message: error instanceof Error ? error.message : String(error),
-            request: request.kind,
-        });
+        post({ kind: 'error', message: messageOf(error), request: request.kind });
     }
 }
 
 async function settle(): Promise<void> {
-    if (pending > 0 || !pipeline.needsSettle()) return;
-    postState('refining alignment', -1);
+    if (pending > 0) return;
     try {
-        if (await pipeline.settle()) publishMosaic();
+        await refineAlignment();
     } catch (error) {
-        post({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+        post({ kind: 'error', message: messageOf(error) });
     }
 }
 
@@ -190,7 +189,7 @@ queue = queue.then(() => {
     try {
         pipeline.warmup();
     } catch (error) {
-        post({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
+        post({ kind: 'error', message: messageOf(error) });
     }
     post({ kind: 'ready' });
     postState('ready', 1);

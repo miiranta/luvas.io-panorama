@@ -8,9 +8,10 @@ import {
     createCanvasGeometry,
 } from '../compositing/warping/canvas-geometry';
 import { levelHorizon } from '../registration/alignment/level-horizon';
+import { chooseSurface } from '../compositing/warping/choose-surface';
 import { CpuMosaic } from '../compositing/blending/cpu-mosaic';
 import { MosaicFactory, MosaicSurface } from '../compositing/blending/mosaic-surface';
-import { ColorImage } from '../foundation/imaging/image';
+import { ColorImage, Rgb } from '../foundation/imaging/image';
 import { SeamFinder, SeamStats } from '../compositing/seams/seam-finder';
 import { Warper } from '../compositing/warping/warper';
 import { WarpTile } from '../compositing/warping/warp-tile';
@@ -43,6 +44,14 @@ const NO_STATS: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
 
 export type ProgressReporter = (stage: string, progress: number) => void;
 
+function gainChange(before: Rgb, after: Rgb): number {
+    return Math.max(
+        Math.abs(before[0] - after[0]),
+        Math.abs(before[1] - after[1]),
+        Math.abs(before[2] - after[2]),
+    );
+}
+
 export class MosaicCompositor {
     private committed: MosaicSurface | null = null;
     private preview: MosaicSurface | null = null;
@@ -50,7 +59,7 @@ export class MosaicCompositor {
     private committedGeometry: CanvasGeometry | null = null;
     private committedDistortion = 0;
     private committedVignetting = 0;
-    private readonly committedGains = new Map<number, number>();
+    private readonly committedGains = new Map<number, Rgb>();
     private readonly committedPlacements = new Map<number, { rotation: Mat3; focal: number }>();
     private readonly stats = new Map<number, SeamStats>();
     private coverage: number | null = null;
@@ -193,6 +202,7 @@ export class MosaicCompositor {
                 this.warpFrame(geometry, frame, source, clip),
             orientation: () =>
                 this.canvas?.orientation ?? createCanvasGeometry('planar', 64, 1).orientation,
+            surface: () => this.canvas?.surface ?? 'planar',
             report: this.report,
         });
         return exporter.render(frames, scale, megapixelCap, tileSize);
@@ -202,11 +212,25 @@ export class MosaicCompositor {
         const params = this.params();
         const active = this.frames.active;
         const reference = active[0] ?? { workWidth: FALLBACK_WIDTH, workHeight: FALLBACK_HEIGHT };
+        const orientation = levelHorizon(active.map((frame) => frame.rotation));
+        const surface =
+            params.compose.surface === 'auto'
+                ? chooseSurface(
+                      active.map((frame) => ({
+                          rotation: frame.rotation,
+                          width: frame.workWidth,
+                          height: frame.workHeight,
+                          focal: this.cameras.focalFor(frame),
+                          distortion: this.cameras.distortion,
+                      })),
+                      orientation,
+                  )
+                : params.compose.surface;
         this.canvas = createCanvasGeometry(
-            params.compose.surface,
+            surface,
             Math.round(params.compose.canvasWidth),
             this.cameras.focalFor(reference),
-            levelHorizon(active.map((frame) => frame.rotation)),
+            orientation,
         );
         this.photometry.calibrate(active);
         return this.canvas;
@@ -237,7 +261,7 @@ export class MosaicCompositor {
         if (twist > PREVIEW_TWIST_DEGREES) return true;
         for (const frame of this.frames.active) {
             const gain = this.committedGains.get(frame.id);
-            if (gain !== undefined && Math.abs(gain - frame.gain) > GAIN_TOLERANCE) return true;
+            if (gain && gainChange(gain, frame.gain) > GAIN_TOLERANCE) return true;
             const placement = this.committedPlacements.get(frame.id);
             if (!placement) continue;
             const moved = rotationDegreesBetween(frame.rotation, placement.rotation);

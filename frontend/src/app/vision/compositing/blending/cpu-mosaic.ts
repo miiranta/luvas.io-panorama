@@ -10,6 +10,35 @@ import { MosaicGrid } from './mosaic-grid';
 import { PyramidLevel, expandLevel, gaussianPyramid } from './gaussian-pyramid';
 import { WarpTile, premultipliedTile } from '../warping/warp-tile';
 
+interface RegionBox {
+    u0: number;
+    v0: number;
+    width: number;
+    height: number;
+}
+
+interface RegionLevel extends RegionBox {
+    data: Float32Array;
+}
+
+const taps = createBilinearTaps();
+
+function upsampleRegion(coarse: RegionLevel, region: RegionBox): Float32Array {
+    const { u0, v0, width, height } = region;
+    const merged = new Float32Array(width * height * 3);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const cx = (u0 + x) * 0.5 - coarse.u0;
+            const cy = (v0 + y) * 0.5 - coarse.v0;
+            bilinearTaps(coarse.width, coarse.height, cx, cy, taps);
+            const target = (y * width + x) * 3;
+            for (let c = 0; c < 3; c++)
+                merged[target + c] = sampleBilinear(coarse.data, taps, 3, c);
+        }
+    }
+    return merged;
+}
+
 export class CpuMosaic extends MosaicGrid implements MosaicSurface {
     readonly kind = 'cpu';
     readonly bandColor: Float32Array[] = [];
@@ -147,59 +176,17 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
     }
 
     private collapseRegion(overlay: CpuMosaic | null, box: CanvasBox): PyramidLevel {
-        const taps = createBilinearTaps();
-        let previous: {
-            data: Float32Array;
-            u0: number;
-            v0: number;
-            width: number;
-            height: number;
-        } | null = null;
+        let previous: RegionLevel | null = null;
         for (let level = this.bands - 1; level >= 0; level--) {
-            const stride = this.bandWidth[level];
             const { u0, v0, u1, v1 } = this.levelRegion(level, box);
-            const width = u1 - u0 + 1;
-            const height = v1 - v0 + 1;
-            const merged = new Float32Array(width * height * 3);
-            if (previous) {
-                const coarse = previous;
-                for (let y = 0; y < height; y++) {
-                    for (let x = 0; x < width; x++) {
-                        bilinearTaps(
-                            coarse.width,
-                            coarse.height,
-                            (u0 + x) * 0.5 - coarse.u0,
-                            (v0 + y) * 0.5 - coarse.v0,
-                            taps,
-                        );
-                        const target = (y * width + x) * 3;
-                        for (let c = 0; c < 3; c++) {
-                            merged[target + c] = sampleBilinear(coarse.data, taps, 3, c);
-                        }
-                    }
-                }
-            }
-            const color = this.bandColor[level];
-            const weight = this.bandWeight[level];
-            const extraColor = overlay?.bandColor[level] ?? null;
-            const extraWeight = overlay?.bandWeight[level] ?? null;
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    const index = (v0 + y) * stride + u0 + x;
-                    const total = weight[index] + (extraWeight ? extraWeight[index] : 0);
-                    if (total <= 1e-5) continue;
-                    const inverse = 1 / total;
-                    const target = (y * width + x) * 3;
-                    for (let c = 0; c < 3; c++) {
-                        const sum =
-                            color[index * 3 + c] + (extraColor ? extraColor[index * 3 + c] : 0);
-                        merged[target + c] += sum * inverse;
-                    }
-                }
-            }
-            previous = { data: merged, u0, v0, width, height };
+            const region = { u0, v0, width: u1 - u0 + 1, height: v1 - v0 + 1 };
+            const merged: Float32Array = previous
+                ? upsampleRegion(previous, region)
+                : new Float32Array(region.width * region.height * 3);
+            this.addBand(level, overlay, region, merged);
+            previous = { data: merged, ...region };
         }
-        const finest = previous as { data: Float32Array; u0: number; v0: number; width: number };
+        const finest = previous as RegionLevel;
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const data = new Float32Array(width * height * 3);
@@ -208,6 +195,33 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
             data.set(finest.data.subarray(from, from + width * 3), y * width * 3);
         }
         return { data, width, height };
+    }
+
+    private addBand(
+        level: number,
+        overlay: CpuMosaic | null,
+        region: RegionBox,
+        merged: Float32Array,
+    ): void {
+        const stride = this.bandWidth[level];
+        const color = this.bandColor[level];
+        const weight = this.bandWeight[level];
+        const extraColor = overlay?.bandColor[level] ?? null;
+        const extraWeight = overlay?.bandWeight[level] ?? null;
+        const { u0, v0, width, height } = region;
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const index = (v0 + y) * stride + u0 + x;
+                const total = weight[index] + (extraWeight ? extraWeight[index] : 0);
+                if (total <= 1e-5) continue;
+                const inverse = 1 / total;
+                const target = (y * width + x) * 3;
+                for (let c = 0; c < 3; c++) {
+                    const sum = color[index * 3 + c] + (extraColor ? extraColor[index * 3 + c] : 0);
+                    merged[target + c] += sum * inverse;
+                }
+            }
+        }
     }
 
     render(

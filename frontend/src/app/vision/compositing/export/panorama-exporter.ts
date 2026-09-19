@@ -9,6 +9,7 @@ import { CanvasBox, alignDown, alignUp } from '../warping/canvas-box';
 import { CanvasGeometry, createCanvasGeometry } from '../warping/canvas-geometry';
 import { CanvasTransfer, canvasTransfer } from '../warping/canvas-transfer';
 import {
+    Footprint,
     FootprintRequest,
     clipFootprint,
     computeFootprint,
@@ -51,6 +52,7 @@ export interface ExportContext {
         clip: CanvasBox | null,
     ) => WarpTile | null;
     orientation: () => Mat3;
+    surface: () => SurfaceKind;
     report: (stage: string, progress: number) => void;
 }
 
@@ -60,6 +62,25 @@ interface SeamMask {
     width: number;
     height: number;
     mask: Float32Array;
+}
+
+interface ExportPlan {
+    geometry: CanvasGeometry;
+    low: CanvasGeometry;
+    transfer: CanvasTransfer;
+    frames: readonly Keyframe[];
+    masks: Map<number, SeamMask>;
+    footprints: Map<number, Footprint>;
+    sources: SourceCache;
+}
+
+function grow(box: CanvasBox, margin: number): CanvasBox {
+    return {
+        u0: box.u0 - margin,
+        u1: box.u1 + margin,
+        v0: box.v0 - margin,
+        v1: box.v1 + margin,
+    };
 }
 
 class SourceCache {
@@ -96,8 +117,6 @@ export class PanoramaExporter {
         tileSize = EXPORT_TILE,
     ): Promise<ExportedImage | null> {
         const context = this.context;
-        const params = context.params();
-        const compose = params.compose;
         context.report('preparing export', 0);
         const sources = new SourceCache(SOURCE_CACHE);
         const usable = frames.filter((frame) => frame.hasComposeSource && frame.composeWidth > 0);
@@ -105,13 +124,13 @@ export class PanoramaExporter {
         const reference = usable[0];
         const nativeFocal = context.focalAt(reference, reference.composeWidth);
         const orientation = context.orientation();
-        let geometry = exportGeometry(compose.surface, nativeFocal * scale, orientation);
+        let geometry = exportGeometry(context.surface(), nativeFocal * scale, orientation);
         let box = this.box(geometry, usable);
         if (!box) return null;
         const megapixels = this.megapixels(box);
         if (megapixels > megapixelCap) {
             geometry = exportGeometry(
-                compose.surface,
+                context.surface(),
                 nativeFocal * scale * Math.sqrt(megapixelCap / megapixels),
                 orientation,
             );
@@ -119,86 +138,90 @@ export class PanoramaExporter {
             if (!box) return null;
         }
         const lowScale = Math.min(1, Math.sqrt(SEAM_MEGAPIXELS / this.megapixels(box)));
-        const low = exportGeometry(compose.surface, geometry.focal * lowScale, orientation);
+        const low = exportGeometry(context.surface(), geometry.focal * lowScale, orientation);
         const masks = await this.seams(low, usable, sources);
-        const transfer = canvasTransfer(geometry, low);
+        const plan: ExportPlan = {
+            geometry,
+            low,
+            transfer: canvasTransfer(geometry, low),
+            frames: usable,
+            masks,
+            sources,
+            footprints: new Map(
+                usable.map((frame) => [frame.id, computeFootprint(geometry, this.request(frame))]),
+            ),
+        };
 
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const writer = new PngWriter(width, height);
         const columns = Math.ceil(width / tileSize);
         const rows = Math.ceil(height / tileSize);
-        const useBands = compose.blend === 'multiband';
-        const footprints = new Map(
-            usable.map((frame) => [frame.id, computeFootprint(geometry, this.request(frame))]),
-        );
-        let done = 0;
         for (let row = 0; row < rows; row++) {
-            const coreV0 = box.v0 + row * tileSize;
-            const coreV1 = Math.min(box.v1, coreV0 + tileSize - 1);
-            const stripHeight = coreV1 - coreV0 + 1;
+            const v0 = box.v0 + row * tileSize;
+            const v1 = Math.min(box.v1, v0 + tileSize - 1);
+            const stripHeight = v1 - v0 + 1;
             const strip = new Uint8ClampedArray(width * stripHeight * 4);
             for (let column = 0; column < columns; column++) {
-                context.report('rendering export', done / (rows * columns));
-                const coreU0 = box.u0 + column * tileSize;
-                const coreU1 = Math.min(box.u1, coreU0 + tileSize - 1);
-                const region: CanvasBox = {
-                    u0: alignDown(coreU0 - HALO),
-                    u1: alignUp(coreU1 + HALO + 1) - 1,
-                    v0: Math.max(0, alignDown(coreV0 - HALO)),
-                    v1: Math.min(geometry.height - 1, alignUp(coreV1 + HALO + 1) - 1),
-                };
-                const regionWidth = Math.min(region.u1 - region.u0 + 1, geometry.width);
-                const mosaic = context.createMosaic(
-                    regionWidth,
-                    region.v1 - region.v0 + 1,
-                    compose.bands,
-                    {
-                        u0: ((region.u0 % geometry.width) + geometry.width) % geometry.width,
-                        v0: region.v0,
-                        canvasWidth: geometry.width,
-                    },
-                );
-                for (const frame of usable) {
-                    const mask = masks.get(frame.id);
-                    const footprint = footprints.get(frame.id);
-                    if (!mask || !footprint?.valid) continue;
-                    const reach = {
-                        u0: footprint.u0 - HALO,
-                        u1: footprint.u1 + HALO,
-                        v0: footprint.v0 - HALO,
-                        v1: footprint.v1 + HALO,
-                    };
-                    if (!clipFootprint(geometry, reach, region)) continue;
-                    const source = await sources.get(frame);
-                    if (!source) continue;
-                    const tile = context.warpFrame(geometry, frame, source, region);
-                    if (!tile) continue;
-                    this.applySeam(tile, mask, transfer, low);
-                    blendTile(mosaic, tile, compose.blend, context.blur());
-                }
-                const image = mosaic.render(useBands, null, {
-                    u0: coreU0 - region.u0,
-                    v0: coreV0 - region.v0,
-                    u1: coreU1 - region.u0,
-                    v1: coreV1 - region.v0,
-                });
-                mosaic.dispose();
-                const tileWidth = coreU1 - coreU0 + 1;
-                const offset = coreU0 - box.u0;
+                context.report('rendering export', (row * columns + column) / (rows * columns));
+                const u0 = box.u0 + column * tileSize;
+                const u1 = Math.min(box.u1, u0 + tileSize - 1);
+                const image = await this.renderTile(plan, { u0, v0, u1, v1 });
+                const tileWidth = u1 - u0 + 1;
                 for (let y = 0; y < stripHeight; y++) {
                     const from = y * tileWidth * 4;
                     strip.set(
                         image.data.subarray(from, from + tileWidth * 4),
-                        (y * width + offset) * 4,
+                        (y * width + u0 - box.u0) * 4,
                     );
                 }
-                done++;
             }
             await writer.writeRows(strip, stripHeight);
         }
         context.report('encoding export', 1);
         return { width, height, png: await writer.finish() };
+    }
+
+    private async renderTile(plan: ExportPlan, core: CanvasBox): Promise<ImageData> {
+        const { geometry, low, transfer, masks, footprints, sources } = plan;
+        const context = this.context;
+        const compose = context.params().compose;
+        const region: CanvasBox = {
+            u0: alignDown(core.u0 - HALO),
+            u1: alignUp(core.u1 + HALO + 1) - 1,
+            v0: Math.max(0, alignDown(core.v0 - HALO)),
+            v1: Math.min(geometry.height - 1, alignUp(core.v1 + HALO + 1) - 1),
+        };
+        const mosaic = context.createMosaic(
+            Math.min(region.u1 - region.u0 + 1, geometry.width),
+            region.v1 - region.v0 + 1,
+            compose.bands,
+            {
+                u0: ((region.u0 % geometry.width) + geometry.width) % geometry.width,
+                v0: region.v0,
+                canvasWidth: geometry.width,
+            },
+        );
+        for (const frame of plan.frames) {
+            const mask = masks.get(frame.id);
+            const footprint = footprints.get(frame.id);
+            if (!mask || !footprint?.valid) continue;
+            if (!clipFootprint(geometry, grow(footprint, HALO), region)) continue;
+            const source = await sources.get(frame);
+            if (!source) continue;
+            const tile = context.warpFrame(geometry, frame, source, region);
+            if (!tile) continue;
+            this.applySeam(tile, mask, transfer, low);
+            blendTile(mosaic, tile, compose.blend, context.blur());
+        }
+        const image = mosaic.render(compose.blend === 'multiband', null, {
+            u0: core.u0 - region.u0,
+            v0: core.v0 - region.v0,
+            u1: core.u1 - region.u0,
+            v1: core.v1 - region.v0,
+        });
+        mosaic.dispose();
+        return image;
     }
 
     private megapixels(box: CanvasBox): number {

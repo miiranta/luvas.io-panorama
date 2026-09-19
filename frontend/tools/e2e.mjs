@@ -258,7 +258,7 @@ try {
     check(
         'selects reflect the active parameters',
         selectState.includes('homography') &&
-            selectState.includes('planar') &&
+            selectState.includes('auto') &&
             selectState.includes('multiband'),
         selectState.join(', '),
     );
@@ -268,8 +268,8 @@ try {
     (() => {
       const selects = document.querySelectorAll('app-settings-sheet select');
       for (const select of selects) {
-        if ([...select.options].some((o) => o.value === 'cylindrical')) {
-          select.value = 'cylindrical';
+        if ([...select.options].some((o) => o.value === 'planar')) {
+          select.value = 'planar';
           select.dispatchEvent(new Event('change', { bubbles: true }));
           return true;
         }

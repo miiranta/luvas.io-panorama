@@ -1,3 +1,4 @@
+import { bicubicTaps, createBicubicTaps, sampleBicubic } from './bicubic';
 import { bilinearTaps, createBilinearTaps, sampleBilinear } from './bilinear';
 import { gaussianBlur } from './gaussian-blur';
 import { grayPyramid } from './gray-pyramid';
@@ -38,6 +39,29 @@ describe('imaging', () => {
         const taps = bilinearTaps(2, 1, 0.5, 0, createBilinearTaps());
         expect(sampleBilinear(data, taps, 2, 0)).toBeCloseTo(2, 6);
         expect(sampleBilinear(data, taps, 2, 1)).toBeCloseTo(200, 6);
+    });
+
+    it('interpolates bicubically through the samples and reproduces a quadratic', () => {
+        const width = 8;
+        const data = new Float32Array(width * 3);
+        for (let y = 0; y < 3; y++)
+            for (let x = 0; x < width; x++) data[y * width + x] = x * x + 5 * y;
+        const taps = createBicubicTaps();
+        expect(sampleBicubic(data, bicubicTaps(width, 3, 3, 1, taps), width)).toBeCloseTo(14, 9);
+        expect(sampleBicubic(data, bicubicTaps(width, 3, 3.5, 1, taps), width)).toBeCloseTo(
+            3.5 * 3.5 + 5,
+            9,
+        );
+    });
+
+    it('overshoots a step edge only slightly and clamps at the border', () => {
+        const data = new Float32Array([0, 0, 0, 100, 100, 100]);
+        const taps = createBicubicTaps();
+        const near = sampleBicubic(data, bicubicTaps(6, 1, 3.25, 0, taps), 6);
+        expect(near).toBeGreaterThan(100);
+        expect(near).toBeLessThan(110);
+        expect(sampleBicubic(data, bicubicTaps(6, 1, -4, 0, taps), 6)).toBe(0);
+        expect(sampleBicubic(data, bicubicTaps(6, 1, 12, 0, taps), 6)).toBe(100);
     });
 
     it('keeps a constant image constant under Gaussian blur', () => {

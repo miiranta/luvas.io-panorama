@@ -1,12 +1,12 @@
 import { Keypoint } from '../features/detection/keypoint';
-import { ColorImage, imageCenter } from '../foundation/imaging/image';
+import { ColorImage, Rgb, UNIT_RGB, imageCenter } from '../foundation/imaging/image';
 import { Mat3, mat3Identity } from '../foundation/math/matrix3';
 
 const ARCHIVE_QUALITY = 0.94;
 
 export class Keyframe {
     rotation: Mat3;
-    gain = 1;
+    gain: Rgb = UNIT_RGB;
     rejected = false;
     composedRotation: Mat3 | null = null;
     readonly composeWidth: number;

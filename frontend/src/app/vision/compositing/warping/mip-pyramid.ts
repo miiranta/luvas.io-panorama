@@ -1,3 +1,4 @@
+import { bicubicTaps, createBicubicTaps, sampleBicubic } from '../../foundation/imaging/bicubic';
 import {
     bilinearTaps,
     createBilinearTaps,
@@ -12,7 +13,8 @@ export interface MipLevel {
 }
 
 const cache = new WeakMap<ColorImage, MipLevel[]>();
-const taps = createBilinearTaps();
+const linearTaps = createBilinearTaps();
+const cubicTaps = createBicubicTaps();
 
 export function mipPyramidFor(image: ColorImage, maxLevels = 6): MipLevel[] {
     const cached = cache.get(image);
@@ -58,12 +60,17 @@ function buildMipPyramid(image: ColorImage, maxLevels = 6): MipLevel[] {
     return levels;
 }
 
-function sampleLevel(level: MipLevel, x: number, y: number, out: Float32Array): void {
-    bilinearTaps(level.width, level.height, x, y, taps);
-    for (let c = 0; c < 3; c++) out[c] = sampleBilinear(level.data, taps, 3, c);
+function sampleFinest(level: MipLevel, x: number, y: number, out: Float32Array): void {
+    bicubicTaps(level.width, level.height, x, y, cubicTaps);
+    for (let c = 0; c < 3; c++) out[c] = sampleBicubic(level.data, cubicTaps, level.width, 3, c);
 }
 
-export function sampleTrilinear(
+function sampleCoarse(level: MipLevel, x: number, y: number, out: Float32Array): void {
+    bilinearTaps(level.width, level.height, x, y, linearTaps);
+    for (let c = 0; c < 3; c++) out[c] = sampleBilinear(level.data, linearTaps, 3, c);
+}
+
+export function sampleMipmapped(
     levels: readonly MipLevel[],
     x: number,
     y: number,
@@ -88,8 +95,12 @@ function sampleScaled(
     y: number,
     out: Float32Array,
 ): void {
+    if (index === 0) {
+        sampleFinest(levels[0], x, y, out);
+        return;
+    }
     const level = levels[index];
     const scaleX = level.width / levels[0].width;
     const scaleY = level.height / levels[0].height;
-    sampleLevel(level, (x + 0.5) * scaleX - 0.5, (y + 0.5) * scaleY - 0.5, out);
+    sampleCoarse(level, (x + 0.5) * scaleX - 0.5, (y + 0.5) * scaleY - 0.5, out);
 }

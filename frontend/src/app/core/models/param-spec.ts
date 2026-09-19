@@ -329,9 +329,9 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         group: 'compose',
         key: 'surface',
         label: 'Surface',
-        hint: 'Plane up to ~90°, cylinder up to 360° horizontally, sphere 360°×180°',
+        hint: 'Auto picks the plane while the photos fit ~100°×84°, then the cylinder (360°×92°), then the sphere',
         kind: 'choice',
-        options: ['planar', 'cylindrical', 'spherical'],
+        options: ['auto', 'planar', 'cylindrical', 'spherical'],
         restage: 'compose',
     },
     {

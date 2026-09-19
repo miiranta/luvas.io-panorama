@@ -37,10 +37,8 @@ export interface FrameReport {
     reason: string;
     keypoints: number;
     focal: number;
-    yaw: number;
     pairs: PairReport[];
-    bundleBefore: number;
-    bundleAfter: number;
+    reprojectionError: number;
     overlapPixels: number;
     inconsistentPixels: number;
     coveragePercent: number;
@@ -83,8 +81,6 @@ export interface PreviewPayload {
 export interface GraphNodeRecord {
     id: number;
     label: string;
-    yaw: number;
-    pitch: number;
     keypoints: number;
     rejected: boolean;
     inMainComponent: boolean;

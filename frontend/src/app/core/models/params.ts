@@ -1,6 +1,7 @@
 export type DetectorKind = 'harris' | 'shi-tomasi' | 'fast';
 export type ModelKind = 'translation' | 'similarity' | 'affine' | 'homography';
 export type SurfaceKind = 'planar' | 'cylindrical' | 'spherical';
+export type SurfaceChoice = SurfaceKind | 'auto';
 export type BlendKind = 'average' | 'feather' | 'multiband';
 
 export interface DetectParams {
@@ -49,7 +50,7 @@ export interface GlobalParams {
 }
 
 export interface ComposeParams {
-    surface: SurfaceKind;
+    surface: SurfaceChoice;
     canvasWidth: number;
     blend: BlendKind;
     featherWidth: number;
@@ -118,7 +119,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
         keyframeMinAngle: 3,
     },
     compose: {
-        surface: 'planar',
+        surface: 'auto',
         canvasWidth: 1792,
         blend: 'multiband',
         featherWidth: 32,

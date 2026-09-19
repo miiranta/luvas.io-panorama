@@ -1,10 +1,10 @@
 import { inflateSync } from 'node:zlib';
 import { DEFAULT_PARAMS, PipelineParams } from '../src/app/core/models/params';
-import { GraphNodeRecord } from '../src/app/core/models/reports';
 import { StitchPipeline } from '../src/app/vision/pipeline/stitch-pipeline';
 import { Mat3, mat3Multiply, mat3Transpose } from '../src/app/vision/foundation/math/matrix3';
 import {
     rotationDegreesBetween,
+    yawDegrees,
     rotationFromAxisAngle,
 } from '../src/app/vision/foundation/math/rotation';
 import {
@@ -26,6 +26,7 @@ import {
     fastSegmentTest,
 } from '../src/app/vision/features/detection/fast-segment-test';
 import { Keyframe } from '../src/app/vision/pipeline/keyframe';
+import { Rgb } from '../src/app/vision/foundation/imaging/image';
 import { CpuMosaic } from '../src/app/vision/compositing/blending/cpu-mosaic';
 
 function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: Uint8Array } {
@@ -72,6 +73,31 @@ function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: 
         }
     }
     return { width, height, data };
+}
+
+function keyframes(pipeline: StitchPipeline): readonly Keyframe[] {
+    return (pipeline as unknown as { frames: { all: readonly Keyframe[] } }).frames.all;
+}
+
+function pitchDegrees(rotation: Mat3): number {
+    return (Math.asin(Math.min(1, Math.max(-1, rotation[7]))) * 180) / Math.PI;
+}
+
+function worstOffset(
+    pipeline: StitchPipeline,
+    angle: (rotation: Mat3) => number,
+    truth: readonly number[],
+): number {
+    const frames = keyframes(pipeline);
+    const base = frames.find((frame) => frame.label === '#1');
+    const errors: number[] = [];
+    for (let i = 1; i < truth.length; i++) {
+        const frame = frames.find((candidate) => candidate.label === `#${i + 1}`);
+        if (!frame || !base || frame.rejected) continue;
+        const recovered = Math.abs(angle(frame.rotation) - angle(base.rotation));
+        errors.push(Math.abs(recovered - Math.abs(truth[i] - truth[0])));
+    }
+    return errors.length > 0 ? Math.max(...errors) : Number.POSITIVE_INFINITY;
 }
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
@@ -128,8 +154,8 @@ async function runScenario(
         console.log(
             `  frame ${report.label}: kp=${report.keypoints} ` +
                 `inliers=${report.pairs.map((p) => p.inliers).join('/') || '-'} ` +
-                `f=${report.focal.toFixed(0)} yaw=${report.yaw.toFixed(1)}° ` +
-                `bundle=${report.bundleBefore.toFixed(2)}→${report.bundleAfter.toFixed(2)} ` +
+                `f=${report.focal.toFixed(0)} ` +
+                `reprojection=${report.reprojectionError.toFixed(2)} ` +
                 `${report.accepted ? 'ok' : 'REJECTED: ' + report.reason}`,
         );
     }
@@ -182,24 +208,13 @@ async function runScenario(
         `${graph.components} component(s), inferred order ${graph.order.join('→')}`,
     );
 
-    const baseNode = graph.nodes.find((n) => n.label === '#1');
-    const worstOffset = (angle: (node: GraphNodeRecord) => number, truth: number[]) => {
-        const errors: number[] = [];
-        for (let i = 1; i < truth.length; i++) {
-            const nodeI = graph.nodes.find((n) => n.label === `#${i + 1}`);
-            if (!nodeI || !baseNode || nodeI.rejected) continue;
-            const recovered = Math.abs(angle(nodeI) - angle(baseNode));
-            errors.push(Math.abs(recovered - Math.abs(truth[i] - truth[0])));
-        }
-        return errors.length > 0 ? Math.max(...errors) : Number.POSITIVE_INFINITY;
-    };
-    const worstYaw = worstOffset((node) => node.yaw, yaws);
+    const worstYaw = worstOffset(pipeline, yawDegrees, yaws);
     check(
         `${title}: yaw recovered`,
         worstYaw < 1.5,
         `worst offset ${worstYaw.toFixed(2)}° (ground truth ${yaws.join('/')})`,
     );
-    const worstPitch = worstOffset((node) => node.pitch, pitches);
+    const worstPitch = worstOffset(pipeline, pitchDegrees, pitches);
     check(
         `${title}: pitch recovered`,
         worstPitch < 1.5,
@@ -222,18 +237,7 @@ async function runScenario(
         Math.abs(vignetting - truthVignetting) < (options.vignetting === undefined ? 0.1 : 0.06),
         `β ${vignetting.toFixed(3)} vs ${truthVignetting.toFixed(3)} rendered`,
     );
-    const settledGraph = pipeline.graph();
-    const settledErrors: number[] = [];
-    const settledBase = settledGraph.nodes.find((n) => n.label === '#1');
-    for (let i = 1; i < yaws.length; i++) {
-        const node = settledGraph.nodes.find((n) => n.label === `#${i + 1}`);
-        if (!node || !settledBase || node.rejected) continue;
-        settledErrors.push(
-            Math.abs(Math.abs(node.yaw - settledBase.yaw) - Math.abs(yaws[i] - yaws[0])),
-        );
-    }
-    const settledWorst =
-        settledErrors.length > 0 ? Math.max(...settledErrors) : Number.POSITIVE_INFINITY;
+    const settledWorst = worstOffset(pipeline, yawDegrees, yaws);
     check(
         `${title}: global refinement keeps the alignment`,
         settledWorst <= Math.max(worstYaw, 0.2) + 0.05,
@@ -476,16 +480,27 @@ function runUnitChecks(): void {
     );
 }
 
-async function runExposureCheck(params: PipelineParams): Promise<void> {
-    console.log('\n=== exposure after reordering ===');
+function channelErrors(gains: readonly Rgb[], exposures: readonly Rgb[]): number[] {
+    return [0, 1, 2].flatMap((c) => {
+        const expected = exposures.map((exposure) => 1 / exposure[c]);
+        const mean = expected.reduce((sum, gain) => sum + gain, 0) / expected.length;
+        return gains.map((gain, i) => Math.abs(gain[c] / (expected[i] / mean) - 1));
+    });
+}
+
+async function runExposureCheck(
+    params: PipelineParams,
+    name: string,
+    exposures: readonly Rgb[],
+): Promise<void> {
+    console.log(`\n=== ${name} after reordering ===`);
     const world = buildWorld(7);
-    const exposures = [1, 1.25, 0.85, 1.1, 0.9, 1.2];
     const pipeline = new StitchPipeline();
     pipeline.setParams(params);
     for (let i = 0; i < exposures.length; i++) {
         const view = renderView(world, rotationFromAxisAngle(0, deg(i * 11), 0), 780, 640, 480);
         for (let p = 0; p < view.data.length; p += 4) {
-            for (let c = 0; c < 3; c++) view.data[p + c] = view.data[p + c] * exposures[i];
+            for (let c = 0; c < 3; c++) view.data[p + c] = view.data[p + c] * exposures[i][c];
         }
         await pipeline.addFrame(
             `#${i + 1}`,
@@ -493,16 +508,16 @@ async function runExposureCheck(params: PipelineParams): Promise<void> {
             scaleImage(view, params.compose.composeWidth),
         );
     }
-    const store = (pipeline as unknown as { frames: { active: Keyframe[] } }).frames;
-    const before = store.active.map((frame) => frame.gain);
+    const active = () => keyframes(pipeline).filter((frame) => !frame.rejected);
+    const before = active().map((frame) => frame.gain);
     await pipeline.resolveFromScratch();
-    const after = store.active.map((frame) => frame.gain);
-    const drift = Math.max(...before.map((gain, i) => Math.abs((after[i] ?? 0) / gain - 1)));
-    const expected = exposures.map((exposure) => 1 / exposure);
-    const mean = expected.reduce((sum, gain) => sum + gain, 0) / expected.length;
-    const error = Math.max(...after.map((gain, i) => Math.abs(gain / (expected[i] / mean) - 1)));
+    const after = active().map((frame) => frame.gain);
+    const drift = Math.max(
+        ...before.flatMap((gain, i) => gain.map((g, c) => Math.abs((after[i]?.[c] ?? 0) / g - 1))),
+    );
+    const error = Math.max(...channelErrors(after, exposures));
     check(
-        'exposure gains survive reordering',
+        `${name} gains survive reordering`,
         after.length === exposures.length && drift < 0.02 && error < 0.1,
         `gain drift ${(drift * 100).toFixed(1)}%, error vs 1/exposure ${(error * 100).toFixed(1)}%`,
     );
@@ -515,7 +530,19 @@ fast.detect.workWidth = 480;
 
 runUnitChecks();
 runScaleChecks();
-await runExposureCheck(fast);
+await runExposureCheck(
+    fast,
+    'exposure',
+    [1, 1.25, 0.85, 1.1, 0.9, 1.2].map((exposure): Rgb => [exposure, exposure, exposure]),
+);
+await runExposureCheck(fast, 'white balance', [
+    [1, 1, 1],
+    [1.15, 1, 0.88],
+    [0.9, 1.05, 1.12],
+    [1.08, 0.95, 1],
+    [0.92, 1, 1.1],
+    [1.1, 1.02, 0.9],
+]);
 await runScenario(
     'horizontal sequence',
     structuredClone(fast),

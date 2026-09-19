@@ -1,6 +1,6 @@
 import { ComposeParams } from '../../../core/models/params';
 import { WarpBackend, cpuWarpBackend } from './warp-backend';
-import { ColorImage } from '../../foundation/imaging/image';
+import { ColorImage, Rgb } from '../../foundation/imaging/image';
 import { Mat3 } from '../../foundation/math/matrix3';
 import { CanvasBox, alignDown, alignUp } from './canvas-box';
 import { CanvasGeometry } from './canvas-geometry';
@@ -18,7 +18,7 @@ export class Warper {
         rotation: Mat3,
         source: ColorImage,
         sourceFocal: number,
-        gain: number,
+        gain: Rgb,
         distortion = 0,
         vignetting = 0,
         clip: CanvasBox | null = null,

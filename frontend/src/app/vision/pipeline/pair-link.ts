@@ -1,13 +1,14 @@
 import { BundleObservation } from '../registration/alignment/bundle-adjuster';
+import { Rgb } from '../foundation/imaging/image';
 import { Mat3 } from '../foundation/math/matrix3';
 
 export interface IntensitySample {
     ax: number;
     ay: number;
-    intensityA: number;
+    colorA: Rgb;
     bx: number;
     by: number;
-    intensityB: number;
+    colorB: Rgb;
 }
 
 export interface PairLink {
@@ -20,8 +21,6 @@ export interface PairLink {
     focal: number | null;
     matrix: Mat3;
     observations: BundleObservation[];
-    meanIntensityA: number;
-    meanIntensityB: number;
     overlapPixels: number;
     intensities: IntensitySample[];
 }

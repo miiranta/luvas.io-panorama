@@ -1,6 +1,6 @@
 import { GraphPayload } from '../../core/models/reports';
 import { GraphEdge, PoseGraph } from '../registration/alignment/pose-graph';
-import { pitchDegrees, yawDegrees } from '../foundation/math/rotation';
+import { yawDegrees } from '../foundation/math/rotation';
 import { Keyframe } from './keyframe';
 import { PairLink } from './pair-link';
 
@@ -68,8 +68,6 @@ export class LinkRegistry {
             nodes: frames.map((frame, index) => ({
                 id: frame.id,
                 label: frame.label,
-                yaw: yawDegrees(frame.rotation),
-                pitch: pitchDegrees(frame.rotation),
                 keypoints: frame.keypoints.length,
                 rejected: frame.rejected,
                 inMainComponent: graph.inMainComponent(index),

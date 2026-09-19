@@ -17,8 +17,6 @@ function link(focal: number | null, verified = true): PairLink {
         focal,
         matrix: mat3Identity(),
         observations: [],
-        meanIntensityA: 1,
-        meanIntensityB: 1,
         overlapPixels: 1,
         intensities: [],
     };

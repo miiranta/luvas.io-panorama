@@ -65,11 +65,6 @@ export function opticalAxis(rotation: Mat3): [number, number, number] {
     return [rotation[6], rotation[7], rotation[8]];
 }
 
-export function pitchDegrees(rotation: Mat3): number {
-    const [, y] = opticalAxis(rotation);
-    return toDegrees(Math.asin(Math.min(1, Math.max(-1, y))));
-}
-
 export function yawDegrees(rotation: Mat3): number {
     const [x, , z] = opticalAxis(rotation);
     return toDegrees(Math.atan2(x, z));

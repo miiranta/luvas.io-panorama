@@ -7,7 +7,7 @@ import { ModelFit, RansacEstimator } from '../registration/estimation/ransac-est
 import { focalFromHomography } from '../registration/alignment/rotational-camera';
 import { undistort } from '../registration/alignment/lens-distortion';
 import { Correspondence } from '../registration/estimation/correspondence';
-import { ColorImage, luma } from '../foundation/imaging/image';
+import { ColorImage, Rgb } from '../foundation/imaging/image';
 import { Mat3 } from '../foundation/math/matrix3';
 import { Keyframe } from './keyframe';
 import { IntensitySample, PairLink } from './pair-link';
@@ -130,8 +130,6 @@ export class PairLinker {
     link(query: Keyframe, train: Keyframe, pair: FittedPair): PairLink {
         const { fit, correspondences } = pair;
         const accepted = correspondences.length;
-        const intensities = intensitySamples(query, train, pair);
-        const [meanIntensityA, meanIntensityB] = meanIntensities(intensities);
         return {
             a: query.id,
             b: train.id,
@@ -142,14 +140,12 @@ export class PairLinker {
             focal: focalFromHomography(fit.matrix, query.centerX, query.centerY),
             matrix: fit.matrix,
             observations: sampleObservations(query.id, train.id, correspondences, fit),
-            meanIntensityA,
-            meanIntensityB,
             overlapPixels: overlapArea(query, train, fit.matrix),
-            intensities,
+            intensities: intensitySamples(query, train, pair),
         };
     }
 
-    report(train: Keyframe, pair: PairMatch, link: PairLink | null): PairReport {
+    report(pair: PairMatch, link: PairLink | null): PairReport {
         const accepted = pair.correspondences.length;
         return {
             inliers: link?.inliers ?? 0,
@@ -211,39 +207,30 @@ function intensitySamples(query: Keyframe, train: Keyframe, pair: FittedPair): I
     const trainWork = train.work;
     if (!queryWork || !trainWork) return [];
     return sampleInliers(pair.correspondences, pair.fit, MAX_INTENSITY_SAMPLES).flatMap((c) => {
-        const intensityA = patchMean(queryWork, c.sx, c.sy);
-        const intensityB = patchMean(trainWork, c.dx, c.dy);
-        if (intensityA === null || intensityB === null) return [];
-        return [{ ax: c.sx, ay: c.sy, intensityA, bx: c.dx, by: c.dy, intensityB }];
+        const colorA = patchColor(queryWork, c.sx, c.sy);
+        const colorB = patchColor(trainWork, c.dx, c.dy);
+        if (!colorA || !colorB) return [];
+        return [{ ax: c.sx, ay: c.sy, colorA, bx: c.dx, by: c.dy, colorB }];
     });
 }
 
-function meanIntensities(samples: readonly IntensitySample[]): [number, number] {
-    if (samples.length === 0) return [1, 1];
-    let sumA = 0;
-    let sumB = 0;
-    for (const sample of samples) {
-        sumA += sample.intensityA;
-        sumB += sample.intensityB;
-    }
-    return [sumA / samples.length, sumB / samples.length];
-}
-
-function patchMean(image: ColorImage, x: number, y: number): number | null {
-    const cx = Math.round(x);
-    const cy = Math.round(y);
-    let sum = 0;
-    let count = 0;
-    for (let dy = -INTENSITY_PATCH_RADIUS; dy <= INTENSITY_PATCH_RADIUS; dy++) {
-        const py = cy + dy;
-        if (py < 0 || py >= image.height) continue;
-        for (let dx = -INTENSITY_PATCH_RADIUS; dx <= INTENSITY_PATCH_RADIUS; dx++) {
-            const px = cx + dx;
-            if (px < 0 || px >= image.width) continue;
+function patchColor(image: ColorImage, x: number, y: number): Rgb | null {
+    const x0 = Math.max(0, Math.round(x) - INTENSITY_PATCH_RADIUS);
+    const y0 = Math.max(0, Math.round(y) - INTENSITY_PATCH_RADIUS);
+    const x1 = Math.min(image.width - 1, Math.round(x) + INTENSITY_PATCH_RADIUS);
+    const y1 = Math.min(image.height - 1, Math.round(y) + INTENSITY_PATCH_RADIUS);
+    if (x0 > x1 || y0 > y1) return null;
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    for (let py = y0; py <= y1; py++) {
+        for (let px = x0; px <= x1; px++) {
             const i = (py * image.width + px) * 4;
-            sum += luma(image.data[i], image.data[i + 1], image.data[i + 2]);
-            count++;
+            red += image.data[i];
+            green += image.data[i + 1];
+            blue += image.data[i + 2];
         }
     }
-    return count === 0 ? null : sum / count;
+    const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+    return [red / count, green / count, blue / count];
 }

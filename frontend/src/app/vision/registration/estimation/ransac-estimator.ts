@@ -26,6 +26,46 @@ export interface ModelFit {
     meanError: number;
 }
 
+interface Selection {
+    inliers: Uint8Array;
+    count: number;
+    error: number;
+}
+
+interface Hypothesis extends Selection {
+    matrix: Mat3;
+}
+
+function meanOf(selection: Selection): number {
+    return selection.error / Math.max(1, selection.count);
+}
+
+function beats(candidate: Selection, best: Selection | null): boolean {
+    if (!best) return true;
+    if (candidate.count !== best.count) return candidate.count > best.count;
+    return meanOf(candidate) < meanOf(best);
+}
+
+function adaptiveLimit(
+    inlierRatio: number,
+    sampleSize: number,
+    confidence: number,
+    current: number,
+    iteration: number,
+): number {
+    if (inlierRatio >= 1) return Math.min(current, iteration);
+    if (inlierRatio <= 0) return current;
+    const denom = Math.log(1 - Math.pow(inlierRatio, sampleSize));
+    if (denom >= -1e-12) return current;
+    const needed = Math.ceil(Math.log(1 - confidence) / denom);
+    return Math.min(current, Math.max(needed, sampleSize * 4));
+}
+
+function alreadyDrawn(indices: readonly number[], count: number, candidate: number): boolean {
+    for (let t = 0; t < count; t++) if (indices[t] === candidate) return true;
+    return false;
+}
+
 export class RansacEstimator {
     constructor(
         private readonly params: ModelParams,
@@ -38,10 +78,7 @@ export class RansacEstimator {
         const sampleSize = MIN_PAIRS[kind];
         if (points.length < sampleSize) return null;
         const limits = points.map((point) => params.ransacThreshold * localizationScale(point));
-        let bestInliers: Uint8Array | null = null;
-        let bestCount = 0;
-        let bestError = Number.POSITIVE_INFINITY;
-        let bestMatrix: Mat3 | null = null;
+        let best: Hypothesis | null = null;
         let maxIterations = Math.min(
             params.ransacMaxIterations,
             distinctSamples(points.length, sampleSize) * SAMPLE_COVERAGE,
@@ -50,72 +87,50 @@ export class RansacEstimator {
         let iteration = 0;
         while (iteration < maxIterations) {
             iteration++;
-            for (let s = 0; s < sampleSize; s++) {
-                let candidate = 0;
-                let unique = false;
-                while (!unique) {
-                    candidate = Math.floor(this.random() * points.length);
-                    unique = true;
-                    for (let t = 0; t < s; t++) if (indices[t] === candidate) unique = false;
-                }
-                indices[s] = candidate;
-            }
+            this.drawSample(indices, points.length);
             const model = fitModel(kind, points, indices);
             if (!model || !isPlausibleModel(model, kind, params.rejectSkew)) continue;
-            let count = 0;
-            let error = 0;
-            const modelInverse = mat3Inverse(model);
-            const inliers = new Uint8Array(points.length);
-            for (let i = 0; i < points.length; i++) {
-                const e = symmetricTransferError(model, modelInverse, points[i]);
-                if (e <= limits[i]) {
-                    inliers[i] = 1;
-                    count++;
-                    error += e;
-                }
-            }
-            if (
-                count > bestCount ||
-                (count === bestCount && error / Math.max(1, count) < bestError)
-            ) {
-                bestCount = count;
-                bestInliers = inliers;
-                bestMatrix = model;
-                bestError = error / Math.max(1, count);
-                const w = count / points.length;
-                if (w > 0 && w < 1) {
-                    const denom = Math.log(1 - Math.pow(w, sampleSize));
-                    if (denom < -1e-12) {
-                        const needed = Math.ceil(Math.log(1 - params.ransacConfidence) / denom);
-                        maxIterations = Math.min(maxIterations, Math.max(needed, sampleSize * 4));
-                    }
-                } else if (w >= 1) {
-                    maxIterations = Math.min(maxIterations, iteration);
-                }
-            }
+            const selection = select(model, points, limits, 1);
+            if (!beats(selection, best)) continue;
+            best = { matrix: model, ...selection };
+            maxIterations = adaptiveLimit(
+                selection.count / points.length,
+                sampleSize,
+                params.ransacConfidence,
+                maxIterations,
+                iteration,
+            );
         }
-        if (!bestMatrix || !bestInliers) return null;
-        let matrix = bestMatrix;
-        let inliers = bestInliers;
-        let count = bestCount;
-        if (params.refitOnInliers && count >= sampleSize) {
-            const refined = this.refine(bestMatrix, points, limits, sampleSize);
-            if (refined && refined.count >= Math.max(sampleSize, bestCount * MIN_RETAINED)) {
-                matrix = refined.matrix;
-                inliers = refined.inliers;
-                count = refined.count;
-            }
-        }
-        let errorSum = 0;
-        const finalInverse = mat3Inverse(matrix);
-        for (let i = 0; i < points.length; i++)
-            if (inliers[i]) errorSum += symmetricTransferError(matrix, finalInverse, points[i]);
+        if (!best) return null;
+        const final = this.polish(best, points, limits, sampleSize);
         return {
-            matrix,
-            inliers,
-            inlierCount: count,
-            meanError: count === 0 ? Number.POSITIVE_INFINITY : errorSum / count,
+            matrix: final.matrix,
+            inliers: final.inliers,
+            inlierCount: final.count,
+            meanError: final.count === 0 ? Number.POSITIVE_INFINITY : final.error / final.count,
         };
+    }
+
+    private drawSample(indices: number[], total: number): void {
+        for (let s = 0; s < indices.length; s++) {
+            let candidate = Math.floor(this.random() * total);
+            while (alreadyDrawn(indices, s, candidate)) {
+                candidate = Math.floor(this.random() * total);
+            }
+            indices[s] = candidate;
+        }
+    }
+
+    private polish(
+        best: Hypothesis,
+        points: readonly Correspondence[],
+        limits: readonly number[],
+        sampleSize: number,
+    ): Hypothesis {
+        if (!this.params.refitOnInliers || best.count < sampleSize) return best;
+        const refined = this.refine(best.matrix, points, limits, sampleSize);
+        const retained = Math.max(sampleSize, best.count * MIN_RETAINED);
+        return refined && refined.count >= retained ? refined : best;
     }
 
     private refine(
@@ -123,7 +138,7 @@ export class RansacEstimator {
         points: readonly Correspondence[],
         limits: readonly number[],
         sampleSize: number,
-    ): { matrix: Mat3; inliers: Uint8Array; count: number } | null {
+    ): Hypothesis | null {
         const { model: kind, rejectSkew } = this.params;
         let matrix = start;
         let current = select(matrix, points, limits, WIDENED_THRESHOLD);
@@ -154,17 +169,19 @@ function select(
     points: readonly Correspondence[],
     limits: readonly number[],
     factor: number,
-): { inliers: Uint8Array; count: number } {
+): Selection {
     const inverse = mat3Inverse(matrix);
     const inliers = new Uint8Array(points.length);
     let count = 0;
+    let error = 0;
     for (let i = 0; i < points.length; i++) {
-        if (symmetricTransferError(matrix, inverse, points[i]) <= limits[i] * factor) {
-            inliers[i] = 1;
-            count++;
-        }
+        const e = symmetricTransferError(matrix, inverse, points[i]);
+        if (e > limits[i] * factor) continue;
+        inliers[i] = 1;
+        count++;
+        error += e;
     }
-    return { inliers, count };
+    return { inliers, count, error };
 }
 
 function sameSet(a: Uint8Array, b: Uint8Array): boolean {

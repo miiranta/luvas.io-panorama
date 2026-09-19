@@ -1,15 +1,39 @@
 import { PipelineParams } from '../../core/models/params';
-import { ExposureCompensator } from '../compositing/photometric/exposure-compensator';
+import {
+    ExposureCompensator,
+    OverlapIntensity,
+} from '../compositing/photometric/exposure-compensator';
 import {
     VignettingSample,
     estimateVignetting,
     vignetteAt,
 } from '../compositing/photometric/vignetting';
+import { Rgb, UNIT_RGB, luma } from '../foundation/imaging/image';
 import { CameraSolver } from './camera-solver';
 import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
 import { LinkRegistry } from './link-registry';
 import { PairLink } from './pair-link';
+
+const CHANNELS = [0, 1, 2] as const;
+
+interface OverlapColor {
+    a: number;
+    b: number;
+    meanA: Rgb;
+    meanB: Rgb;
+    weight: number;
+}
+
+function channelOf(overlap: OverlapColor, channel: number): OverlapIntensity {
+    return {
+        a: overlap.a,
+        b: overlap.b,
+        meanA: Math.max(1, overlap.meanA[channel]),
+        meanB: Math.max(1, overlap.meanB[channel]),
+        weight: overlap.weight,
+    };
+}
 
 export class PhotometricCalibrator {
     private vignettingEstimate = 0;
@@ -34,27 +58,24 @@ export class PhotometricCalibrator {
         const indexOf = new Map(active.map((frame, index) => [frame.id, index]));
         this.estimateVignetting(active, indexOf);
         if (!this.params().compose.exposureCompensation || active.length === 0) {
-            for (const frame of this.frames.all) frame.gain = 1;
+            for (const frame of this.frames.all) frame.gain = UNIT_RGB;
             return;
         }
-        const pairs = this.links.verified.flatMap((link) => {
+        const overlaps = this.links.verified.flatMap((link): OverlapColor[] => {
             const a = indexOf.get(link.a);
             const b = indexOf.get(link.b);
             if (a === undefined || b === undefined || link.intensities.length === 0) return [];
-            const [meanA, meanB] = this.correctedMeans(link, active[a], active[b]);
-            return [
-                {
-                    a,
-                    b,
-                    meanA: Math.max(1, meanA),
-                    meanB: Math.max(1, meanB),
-                    weight: Math.max(1, link.overlapPixels),
-                },
-            ];
+            const [meanA, meanB] = this.meanColors(link, active[a], active[b]);
+            return [{ a, b, meanA, meanB, weight: Math.max(1, link.overlapPixels) }];
         });
-        const gains = this.exposure.solve(pairs, active.length);
+        const [red, green, blue] = CHANNELS.map((channel) =>
+            this.exposure.solve(
+                overlaps.map((overlap) => channelOf(overlap, channel)),
+                active.length,
+            ),
+        );
         active.forEach((frame, index) => {
-            frame.gain = gains[index];
+            frame.gain = [red[index], green[index], blue[index]];
         });
     }
 
@@ -81,29 +102,30 @@ export class PhotometricCalibrator {
                     b,
                     radiusSquaredA: this.radiusSquared(active[a], sample.ax, sample.ay),
                     radiusSquaredB: this.radiusSquared(active[b], sample.bx, sample.by),
-                    intensityA: sample.intensityA,
-                    intensityB: sample.intensityB,
+                    intensityA: luma(...sample.colorA),
+                    intensityB: luma(...sample.colorB),
                 });
             }
         }
         this.vignettingEstimate = estimateVignetting(samples, active.length);
     }
 
-    private correctedMeans(link: PairLink, frameA: Keyframe, frameB: Keyframe): [number, number] {
+    private meanColors(link: PairLink, frameA: Keyframe, frameB: Keyframe): [Rgb, Rgb] {
         const beta = this.vignetting;
-        if (beta === 0 || link.intensities.length === 0) {
-            return [link.meanIntensityA, link.meanIntensityB];
-        }
-        let sumA = 0;
-        let sumB = 0;
+        const sumA = [0, 0, 0];
+        const sumB = [0, 0, 0];
         for (const sample of link.intensities) {
-            sumA +=
-                sample.intensityA /
-                vignetteAt(this.radiusSquared(frameA, sample.ax, sample.ay), beta);
-            sumB +=
-                sample.intensityB /
-                vignetteAt(this.radiusSquared(frameB, sample.bx, sample.by), beta);
+            const falloffA = vignetteAt(this.radiusSquared(frameA, sample.ax, sample.ay), beta);
+            const falloffB = vignetteAt(this.radiusSquared(frameB, sample.bx, sample.by), beta);
+            for (const c of CHANNELS) {
+                sumA[c] += sample.colorA[c] / falloffA;
+                sumB[c] += sample.colorB[c] / falloffB;
+            }
         }
-        return [sumA / link.intensities.length, sumB / link.intensities.length];
+        const count = link.intensities.length;
+        return [
+            [sumA[0] / count, sumA[1] / count, sumA[2] / count],
+            [sumB[0] / count, sumB[1] / count, sumB[2] / count],
+        ];
     }
 }
