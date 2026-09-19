@@ -9,7 +9,6 @@ export interface KeypointRecord {
 export interface MatchRecord {
     queryIndex: number;
     trainIndex: number;
-    ratio: number;
     accepted: boolean;
     inlier: boolean;
 }
@@ -25,7 +24,6 @@ export interface StageTimings {
 }
 
 export interface PairReport {
-    trainId: number;
     inliers: number;
     inlierRatio: number;
     meanError: number;
@@ -40,7 +38,6 @@ export interface FrameReport {
     keypoints: number;
     focal: number;
     yaw: number;
-    pitch: number;
     pairs: PairReport[];
     bundleBefore: number;
     bundleAfter: number;

@@ -54,7 +54,7 @@ export class LiveTracker {
         for (const frame of candidates) {
             const pair = this.linker.match(probe, frame, { crossCheck: false });
             if (!isFitted(pair)) continue;
-            const accepted = pair.matches.filter((match) => match.accepted).length;
+            const accepted = pair.correspondences.length;
             const verified = this.linker.verified(pair.fit.inlierCount, accepted, false);
             if (verified) {
                 best = { frame, pair, verified };

@@ -24,18 +24,17 @@ export class Warper {
         clip: CanvasBox | null = null,
     ): WarpTile | null {
         const { geometry, params } = this;
-        const footprint = computeFootprint(
-            geometry,
+        const footprint = computeFootprint(geometry, {
             rotation,
-            source.width,
-            source.height,
-            sourceFocal,
+            width: source.width,
+            height: source.height,
+            focal: sourceFocal,
             distortion,
-        );
+        });
         if (!footprint.valid) return null;
-        const pad = params.blend === 'multiband' ? Math.ceil(params.featherWidth / 2) + 4 : 2;
-        const wraps = geometry.surface !== 'planar';
         const aligned = params.blend === 'multiband';
+        const pad = aligned ? Math.ceil(params.featherWidth / 2) + 4 : 2;
+        const wraps = geometry.surface !== 'planar';
         const padded = {
             u0: wraps ? footprint.u0 - pad : Math.max(0, footprint.u0 - pad),
             u1: wraps ? footprint.u1 + pad : Math.min(geometry.width - 1, footprint.u1 + pad),

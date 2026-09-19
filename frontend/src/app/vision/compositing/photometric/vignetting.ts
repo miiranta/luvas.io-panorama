@@ -34,6 +34,9 @@ export function estimateVignetting(samples: readonly VignettingSample[], cameras
             Math.abs(sample.radiusSquaredA - sample.radiusSquaredB) > 1e-3,
     );
     if (usable.length < MIN_SAMPLES || cameras < 2) return 0;
+    const observed = usable.map(
+        (sample) => Math.log(sample.intensityA) - Math.log(sample.intensityB),
+    );
     const count = cameras + 1;
     const betaIndex = cameras;
     const state = new Float64Array(count);
@@ -41,12 +44,11 @@ export function estimateVignetting(samples: readonly VignettingSample[], cameras
         const normal = new Float64Array(count * count);
         const gradient = new Float64Array(count);
         const beta = state[betaIndex];
-        for (const sample of usable) {
+        usable.forEach((sample, index) => {
             const va = vignetteAt(sample.radiusSquaredA, beta);
             const vb = vignetteAt(sample.radiusSquaredB, beta);
             const residual =
-                Math.log(sample.intensityA) -
-                Math.log(sample.intensityB) -
+                observed[index] -
                 (state[sample.a] - state[sample.b]) -
                 (Math.log(va) - Math.log(vb));
             const weight =
@@ -64,7 +66,7 @@ export function estimateVignetting(samples: readonly VignettingSample[], cameras
                     normal[row * count + column] += weight * jr * jc;
                 }
             }
-        }
+        });
         for (let i = 0; i < cameras; i++) {
             normal[i * count + i] += 1 / (GAIN_PRIOR * GAIN_PRIOR);
             gradient[i] -= state[i] / (GAIN_PRIOR * GAIN_PRIOR);

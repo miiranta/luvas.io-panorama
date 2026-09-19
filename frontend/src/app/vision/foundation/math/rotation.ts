@@ -6,6 +6,7 @@ import {
     mat3MultiplyTransposed,
     mat3Transpose,
 } from './matrix3';
+import { toDegrees } from './angles';
 import { jacobiEigen } from './jacobi-eigen';
 
 export function nearestRotation(m: Mat3): Mat3 {
@@ -56,14 +57,20 @@ export function rotationAngleBetween(a: Mat3, b: Mat3): number {
     return Math.acos(cos);
 }
 
+export function rotationDegreesBetween(a: Mat3, b: Mat3): number {
+    return toDegrees(rotationAngleBetween(a, b));
+}
+
 export function opticalAxis(rotation: Mat3): [number, number, number] {
     return [rotation[6], rotation[7], rotation[8]];
 }
 
-export function yawPitchDegrees(rotation: Mat3): { yaw: number; pitch: number } {
-    const [x, y, z] = opticalAxis(rotation);
-    return {
-        yaw: (Math.atan2(x, z) * 180) / Math.PI,
-        pitch: (Math.asin(Math.min(1, Math.max(-1, y))) * 180) / Math.PI,
-    };
+export function pitchDegrees(rotation: Mat3): number {
+    const [, y] = opticalAxis(rotation);
+    return toDegrees(Math.asin(Math.min(1, Math.max(-1, y))));
+}
+
+export function yawDegrees(rotation: Mat3): number {
+    const [x, , z] = opticalAxis(rotation);
+    return toDegrees(Math.atan2(x, z));
 }

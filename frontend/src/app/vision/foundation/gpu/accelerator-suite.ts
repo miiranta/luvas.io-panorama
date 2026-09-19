@@ -4,7 +4,8 @@ import { BlurBackend, createBlurSelector } from '../../compositing/blending/blur
 import { DetectBackend, createDetectSelector } from '../../features/detection/detect-backend';
 import { MatchBackend, createMatchSelector } from '../../features/matching/match-backend';
 import { WarpBackend, createWarpSelector } from '../../compositing/warping/warp-backend';
-import { MosaicBackend } from '../../compositing/blending/mosaic-backend';
+import { CpuMosaic } from '../../compositing/blending/cpu-mosaic';
+import { MosaicMaker, createMosaicSelector } from '../../compositing/blending/mosaic-backend';
 import { MosaicFactory } from '../../compositing/blending/mosaic-surface';
 import { CornerDetector } from '../../features/detection/corner-detector';
 import { DescriptorMatcher } from '../../features/matching/descriptor-matcher';
@@ -21,7 +22,7 @@ export class AcceleratorSuite {
     private readonly blurSelector: BackendSelector<BlurBackend> = createBlurSelector();
     private readonly matchSelector: BackendSelector<MatchBackend> = createMatchSelector();
     private readonly warpSelector: BackendSelector<WarpBackend> = createWarpSelector();
-    private readonly mosaicBackend = new MosaicBackend();
+    private readonly mosaicSelector: BackendSelector<MosaicMaker> = createMosaicSelector();
     private readonly detectSelector: BackendSelector<DetectBackend>;
 
     constructor(private readonly params: () => PipelineParams) {
@@ -49,7 +50,9 @@ export class AcceleratorSuite {
     }
 
     mosaics(): MosaicFactory {
-        return this.mosaicBackend.factory(this.enabled);
+        const maker = this.mosaicSelector.select(this.enabled);
+        return (width, height, bands, view) =>
+            maker.create(width, height, bands, view) ?? new CpuMosaic(width, height, bands, view);
     }
 
     warmup(): void {
@@ -58,7 +61,7 @@ export class AcceleratorSuite {
         this.matchSelector.select(true);
         this.detectSelector.select(true);
         this.warpSelector.select(true);
-        this.mosaicBackend.describe(true);
+        this.mosaicSelector.select(true);
     }
 
     labels(): AcceleratorLabels {
@@ -67,7 +70,7 @@ export class AcceleratorSuite {
             matchBackend: this.matchSelector.describe(this.enabled),
             detectBackend: this.detectSelector.describe(this.enabled),
             warpBackend: this.warpSelector.describe(this.enabled),
-            mosaicBackend: this.mosaicBackend.describe(this.enabled),
+            mosaicBackend: this.mosaicSelector.describe(this.enabled),
         };
     }
 }

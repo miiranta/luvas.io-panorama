@@ -1,4 +1,6 @@
 import { CanvasGeometry } from './canvas-geometry';
+import { distortFactor } from '../../registration/alignment/lens-distortion';
+import { vignetteAt } from '../photometric/vignetting';
 import { ColorImage, imageCenter } from '../../foundation/imaging/image';
 import { mipPyramidFor, sampleTrilinear } from './mip-pyramid';
 import { Mat3, mat3Identity, mat3Multiply } from '../../foundation/math/matrix3';
@@ -120,6 +122,7 @@ export const cpuWarpBackend: WarpBackend = {
             const cu = (((raw % canvasWidth) + canvasWidth) % canvasWidth) + 0.5;
             if (geometry.surface === 'planar') {
                 columnA[x] = (cu - canvasWidth / 2) / geometry.planarScale;
+                columnB[x] = 1;
             } else {
                 const theta = (cu / canvasWidth) * Math.PI * 2 - Math.PI;
                 columnA[x] = Math.sin(theta);
@@ -148,27 +151,14 @@ export const cpuWarpBackend: WarpBackend = {
                 const t = base + x * 2;
                 projected[t] = Number.NaN;
                 if (!inside[x]) continue;
-                let dx = 0;
-                let dy = 0;
-                let dz = 0;
-                if (geometry.surface === 'spherical') {
-                    dx = columnA[x] * rowB;
-                    dy = rowA;
-                    dz = columnB[x] * rowB;
-                } else if (geometry.surface === 'cylindrical') {
-                    dx = columnA[x];
-                    dy = rowA;
-                    dz = columnB[x];
-                } else {
-                    dx = columnA[x];
-                    dy = rowA;
-                    dz = 1;
-                }
+                const dx = columnA[x] * rowB;
+                const dy = rowA;
+                const dz = columnB[x] * rowB;
                 const camZ = m[6] * dx + m[7] * dy + m[8] * dz;
                 if (camZ <= 1e-6) continue;
                 const nx = (m[0] * dx + m[1] * dy + m[2] * dz) / camZ;
                 const ny = (m[3] * dx + m[4] * dy + m[5] * dz) / camZ;
-                const lens = 1 + distortion * (nx * nx + ny * ny);
+                const lens = distortFactor(nx, ny, distortion);
                 const px = focal * nx * lens + cx;
                 const py = focal * ny * lens + cy;
                 if (px < 0 || py < 0 || px > source.width - 1 || py > source.height - 1) continue;
@@ -201,7 +191,7 @@ export const cpuWarpBackend: WarpBackend = {
                 );
                 const ox = (px - cx) / focal;
                 const oy = (py - cy) / focal;
-                const scale = gain / Math.max(0.05, 1 + vignetting * (ox * ox + oy * oy));
+                const scale = gain / vignetteAt(ox * ox + oy * oy, vignetting);
                 color[index * 3] = Math.min(255, sample[0] * scale);
                 color[index * 3 + 1] = Math.min(255, sample[1] * scale);
                 color[index * 3 + 2] = Math.min(255, sample[2] * scale);
@@ -254,7 +244,6 @@ class GpuWarpBackend implements WarpBackend {
     private textureWidth = 0;
     private textureHeight = 0;
     private uploaded: ColorImage | null = null;
-    private upload = new Uint8Array(0);
     private readback = new Uint8Array(0);
 
     private constructor(
@@ -340,10 +329,6 @@ class GpuWarpBackend implements WarpBackend {
         }
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         if (this.uploaded === source) return true;
-        if (this.upload.length !== source.data.length) {
-            this.upload = new Uint8Array(source.data.length);
-        }
-        this.upload.set(source.data);
         if (this.textureWidth !== source.width || this.textureHeight !== source.height) {
             gl.texImage2D(
                 gl.TEXTURE_2D,
@@ -354,7 +339,7 @@ class GpuWarpBackend implements WarpBackend {
                 0,
                 gl.RGBA,
                 gl.UNSIGNED_BYTE,
-                this.upload,
+                source.data,
             );
             this.textureWidth = source.width;
             this.textureHeight = source.height;
@@ -368,7 +353,7 @@ class GpuWarpBackend implements WarpBackend {
                 source.height,
                 gl.RGBA,
                 gl.UNSIGNED_BYTE,
-                this.upload,
+                source.data,
             );
         }
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);

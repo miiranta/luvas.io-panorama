@@ -42,7 +42,7 @@ function paeth(a: number, b: number, c: number): number {
 export class PngWriter {
     private readonly writer: WritableStreamDefaultWriter<BufferSource>;
     private readonly compressed: Promise<ArrayBuffer>;
-    private previous: Uint8Array;
+    private readonly previous: Uint8Array;
     private rows = 0;
 
     constructor(
@@ -58,6 +58,7 @@ export class PngWriter {
     async writeRows(rgba: Uint8ClampedArray | Uint8Array, count: number): Promise<void> {
         const stride = this.width * 4;
         const block = new Uint8Array(count * (stride + 1));
+        let previous: ArrayLike<number> = this.previous;
         for (let row = 0; row < count; row++) {
             const offset = row * (stride + 1);
             block[offset] = 4;
@@ -65,12 +66,13 @@ export class PngWriter {
             for (let i = 0; i < stride; i++) {
                 const value = rgba[source + i];
                 const left = i >= 4 ? rgba[source + i - 4] : 0;
-                const up = this.previous[i];
-                const upLeft = i >= 4 ? this.previous[i - 4] : 0;
+                const up = previous[i];
+                const upLeft = i >= 4 ? previous[i - 4] : 0;
                 block[offset + 1 + i] = (value - paeth(left, up, upLeft)) & 0xff;
             }
-            this.previous = Uint8Array.from(rgba.subarray(source, source + stride));
+            previous = rgba.subarray(source, source + stride);
         }
+        if (count > 0) this.previous.set(previous);
         this.rows += count;
         await this.writer.ready;
         await this.writer.write(block);

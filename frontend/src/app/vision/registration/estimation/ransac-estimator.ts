@@ -1,7 +1,7 @@
 import { ModelParams } from '../../../core/models/params';
 import { Mat3, mat3Inverse } from '../../foundation/math/matrix3';
 import { Correspondence, MIN_PAIRS, localizationScale } from './correspondence';
-import { fitModel, isPlausibleHomography } from './fit-model';
+import { fitModel, isPlausibleModel } from './fit-model';
 import { symmetricTransferError } from './transfer-error';
 
 const SAMPLE_COVERAGE = 3;
@@ -61,7 +61,7 @@ export class RansacEstimator {
                 indices[s] = candidate;
             }
             const model = fitModel(kind, points, indices);
-            if (!model || !isPlausibleHomography(model, kind, params.rejectSkew)) continue;
+            if (!model || !isPlausibleModel(model, kind, params.rejectSkew)) continue;
             let count = 0;
             let error = 0;
             const modelInverse = mat3Inverse(model);
@@ -133,7 +133,7 @@ export class RansacEstimator {
             for (let i = 0; i < current.inliers.length; i++)
                 if (current.inliers[i]) indices.push(i);
             const refined = fitModel(kind, points, indices);
-            if (!refined || !isPlausibleHomography(refined, kind, rejectSkew)) break;
+            if (!refined || !isPlausibleModel(refined, kind, rejectSkew)) break;
             const factor = Math.max(
                 1,
                 WIDENED_THRESHOLD - ((WIDENED_THRESHOLD - 1) * (round + 1)) / SHRINK_ROUNDS,

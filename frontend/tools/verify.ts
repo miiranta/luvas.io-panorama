@@ -1,9 +1,10 @@
 import { inflateSync } from 'node:zlib';
 import { DEFAULT_PARAMS, PipelineParams } from '../src/app/core/models/params';
+import { GraphNodeRecord } from '../src/app/core/models/reports';
 import { StitchPipeline } from '../src/app/vision/pipeline/stitch-pipeline';
 import { Mat3, mat3Multiply, mat3Transpose } from '../src/app/vision/foundation/math/matrix3';
 import {
-    rotationAngleBetween,
+    rotationDegreesBetween,
     rotationFromAxisAngle,
 } from '../src/app/vision/foundation/math/rotation';
 import {
@@ -73,10 +74,6 @@ function decodePng(buffer: ArrayBuffer): { width: number; height: number; data: 
     return { width, height, data };
 }
 
-function angleBetween(a: Mat3, b: Mat3): number {
-    return (rotationAngleBetween(a, b) * 180) / Math.PI;
-}
-
 const results: { name: string; pass: boolean; detail: string }[] = [];
 
 function check(name: string, pass: boolean, detail: string): void {
@@ -95,6 +92,7 @@ async function runScenario(
         intruder?: boolean;
         distortion?: number;
         vignetting?: number;
+        tiling?: boolean;
     } = {},
 ): Promise<void> {
     console.log(`\n=== ${title} ===`);
@@ -105,14 +103,12 @@ async function runScenario(
     const viewHeight = 480;
     const pipeline = new StitchPipeline();
     pipeline.setParams(params);
-    const truth: Mat3[] = [];
     const reports = [];
     for (let i = 0; i < yaws.length; i++) {
         const rotation = mat3Multiply(
             rotationFromAxisAngle(deg(pitches[i] ?? 0), 0, 0),
             rotationFromAxisAngle(0, deg(yaws[i]), 0),
         );
-        truth.push(rotation);
         const view = renderView(
             world,
             rotation,
@@ -186,20 +182,28 @@ async function runScenario(
         `${graph.components} component(s), inferred order ${graph.order.join('→')}`,
     );
 
-    const pairErrors: number[] = [];
     const baseNode = graph.nodes.find((n) => n.label === '#1');
-    for (let i = 1; i < yaws.length; i++) {
-        const nodeI = graph.nodes.find((n) => n.label === `#${i + 1}`);
-        if (!nodeI || !baseNode || nodeI.rejected) continue;
-        const recovered = Math.abs(nodeI.yaw - baseNode.yaw);
-        pairErrors.push(Math.abs(recovered - Math.abs(yaws[i] - yaws[0])));
-    }
-    void truth;
-    const worstYaw = pairErrors.length > 0 ? Math.max(...pairErrors) : Number.POSITIVE_INFINITY;
+    const worstOffset = (angle: (node: GraphNodeRecord) => number, truth: number[]) => {
+        const errors: number[] = [];
+        for (let i = 1; i < truth.length; i++) {
+            const nodeI = graph.nodes.find((n) => n.label === `#${i + 1}`);
+            if (!nodeI || !baseNode || nodeI.rejected) continue;
+            const recovered = Math.abs(angle(nodeI) - angle(baseNode));
+            errors.push(Math.abs(recovered - Math.abs(truth[i] - truth[0])));
+        }
+        return errors.length > 0 ? Math.max(...errors) : Number.POSITIVE_INFINITY;
+    };
+    const worstYaw = worstOffset((node) => node.yaw, yaws);
     check(
         `${title}: yaw recovered`,
         worstYaw < 1.5,
         `worst offset ${worstYaw.toFixed(2)}° (ground truth ${yaws.join('/')})`,
+    );
+    const worstPitch = worstOffset((node) => node.pitch, pitches);
+    check(
+        `${title}: pitch recovered`,
+        worstPitch < 1.5,
+        `worst offset ${worstPitch.toFixed(2)}° (ground truth ${pitches.join('/')})`,
     );
 
     await pipeline.settle();
@@ -365,8 +369,8 @@ function runUnitChecks(): void {
     const recovered = relativeRotationFromHomography(h, focal, 320, 240);
     check(
         'rotation from the homography',
-        angleBetween(recovered, rotation) < 0.2,
-        `deviation ${angleBetween(recovered, rotation).toFixed(3)}°`,
+        rotationDegreesBetween(recovered, rotation) < 0.2,
+        `deviation ${rotationDegreesBetween(recovered, rotation).toFixed(3)}°`,
     );
 
     const pitches = [-20, -5, 10, 25];
@@ -380,7 +384,7 @@ function runUnitChecks(): void {
         ),
     );
     const meanPitch = pitches.reduce((sum, pitch) => sum + pitch, 0) / pitches.length;
-    const levelled = angleBetween(
+    const levelled = rotationDegreesBetween(
         levelHorizon(vertical),
         mat3Transpose(rotationFromAxisAngle(deg(meanPitch), 0, 0)),
     );
@@ -391,7 +395,13 @@ function runUnitChecks(): void {
     );
 
     const sphere = createCanvasGeometry('spherical', 1024, 500);
-    const zenith = computeFootprint(sphere, rotationFromAxisAngle(deg(80), 0, 0), 640, 480, 500);
+    const zenith = computeFootprint(sphere, {
+        rotation: rotationFromAxisAngle(deg(80), 0, 0),
+        width: 640,
+        height: 480,
+        focal: 500,
+        distortion: 0,
+    });
     check(
         'footprint of a photo containing a pole',
         zenith.v1 === sphere.height - 1 && zenith.u0 === 0 && zenith.u1 === sphere.width - 1,

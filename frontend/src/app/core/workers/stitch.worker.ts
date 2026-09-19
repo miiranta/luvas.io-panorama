@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { WorkerRequest, WorkerResponse } from '../models/worker-protocol';
+import { WorkerRequest, WorkerResponse, fromRasterPayload } from '../models/worker-protocol';
 import { StitchPipeline } from '../../vision/pipeline/stitch-pipeline';
 
 const pipeline = new StitchPipeline();
@@ -67,20 +67,10 @@ async function handle(request: WorkerRequest): Promise<void> {
                 break;
             }
             case 'frame': {
-                const work = {
-                    width: request.work.width,
-                    height: request.work.height,
-                    data: new Uint8ClampedArray(request.work.pixels),
-                };
-                const compose = {
-                    width: request.compose.width,
-                    height: request.compose.height,
-                    data: new Uint8ClampedArray(request.compose.pixels),
-                };
                 const { report, connection } = await pipeline.addFrame(
                     request.label,
-                    work,
-                    compose,
+                    fromRasterPayload(request.work),
+                    fromRasterPayload(request.compose),
                 );
                 const transfer: Transferable[] = [];
                 if (connection) transfer.push(connection.queryImage, connection.trainImage);
@@ -89,15 +79,10 @@ async function handle(request: WorkerRequest): Promise<void> {
                 break;
             }
             case 'preview': {
-                const work = {
-                    width: request.work.width,
-                    height: request.work.height,
-                    data: new Uint8ClampedArray(request.work.pixels),
-                };
                 post({
                     kind: 'preview',
                     epoch: request.epoch,
-                    preview: pipeline.previewMatch(work),
+                    preview: pipeline.previewMatch(fromRasterPayload(request.work)),
                 });
                 break;
             }

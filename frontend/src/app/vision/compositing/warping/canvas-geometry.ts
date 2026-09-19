@@ -1,4 +1,5 @@
 import { SurfaceKind } from '../../../core/models/params';
+import { toDegrees } from '../../foundation/math/angles';
 import { Mat3, mat3Identity, mat3Transpose } from '../../foundation/math/matrix3';
 import { CanvasBox, PYRAMID_ALIGNMENT, alignUp } from './canvas-box';
 
@@ -79,7 +80,6 @@ export function angularSpan(
     geometry: CanvasGeometry,
     box: CanvasBox,
 ): { horizontal: number; vertical: number } {
-    const toDegrees = 180 / Math.PI;
     const fracU = (box.u1 - box.u0 + 1) / geometry.width;
     if (geometry.surface === 'spherical') {
         return {
@@ -91,16 +91,17 @@ export function angularSpan(
         const h = (v: number) => (v / geometry.height - 0.5) * 2 * geometry.cylinderHalfHeight;
         return {
             horizontal: fracU * 360,
-            vertical: (Math.atan(h(box.v1 + 1)) - Math.atan(h(box.v0))) * toDegrees,
+            vertical: toDegrees(Math.atan(h(box.v1 + 1)) - Math.atan(h(box.v0))),
         };
     }
     const angle = (value: number, center: number) =>
         Math.atan((value - center) / geometry.planarScale);
     return {
-        horizontal:
-            (angle(box.u1 + 1, geometry.width / 2) - angle(box.u0, geometry.width / 2)) * toDegrees,
-        vertical:
-            (angle(box.v1 + 1, geometry.height / 2) - angle(box.v0, geometry.height / 2)) *
-            toDegrees,
+        horizontal: toDegrees(
+            angle(box.u1 + 1, geometry.width / 2) - angle(box.u0, geometry.width / 2),
+        ),
+        vertical: toDegrees(
+            angle(box.v1 + 1, geometry.height / 2) - angle(box.v0, geometry.height / 2),
+        ),
     };
 }

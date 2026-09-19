@@ -4,7 +4,6 @@ import { MatchBackend, NO_DISTANCE, cpuMatchBackend } from './match-backend';
 export interface RawMatch {
     queryIndex: number;
     trainIndex: number;
-    ratio: number;
     accepted: boolean;
 }
 
@@ -34,7 +33,6 @@ export class DescriptorMatcher {
             matches.push({
                 queryIndex: q,
                 trainIndex,
-                ratio,
                 accepted: ratio < params.loweRatio && mutual,
             });
         }

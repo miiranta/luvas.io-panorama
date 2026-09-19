@@ -1,21 +1,21 @@
 import { Mat3 } from '../../foundation/math/matrix3';
 import { Correspondence } from './correspondence';
 
-export function transferError(m: Mat3, p: Correspondence): number {
-    const w = m[6] * p.sx + m[7] * p.sy + m[8];
+function projectionError(m: Mat3, x: number, y: number, targetX: number, targetY: number): number {
+    const w = m[6] * x + m[7] * y + m[8];
     if (Math.abs(w) < 1e-12) return Number.POSITIVE_INFINITY;
-    const x = (m[0] * p.sx + m[1] * p.sy + m[2]) / w;
-    const y = (m[3] * p.sx + m[4] * p.sy + m[5]) / w;
-    return Math.hypot(x - p.dx, y - p.dy);
+    const projectedX = (m[0] * x + m[1] * y + m[2]) / w;
+    const projectedY = (m[3] * x + m[4] * y + m[5]) / w;
+    return Math.hypot(projectedX - targetX, projectedY - targetY);
+}
+
+export function transferError(m: Mat3, p: Correspondence): number {
+    return projectionError(m, p.sx, p.sy, p.dx, p.dy);
 }
 
 export function symmetricTransferError(m: Mat3, inverse: Mat3 | null, p: Correspondence): number {
     const forward = transferError(m, p);
     if (!inverse) return forward;
-    const w = inverse[6] * p.dx + inverse[7] * p.dy + inverse[8];
-    if (Math.abs(w) < 1e-12) return Number.POSITIVE_INFINITY;
-    const x = (inverse[0] * p.dx + inverse[1] * p.dy + inverse[2]) / w;
-    const y = (inverse[3] * p.dx + inverse[4] * p.dy + inverse[5]) / w;
-    const backward = Math.hypot(x - p.sx, y - p.sy);
+    const backward = projectionError(inverse, p.dx, p.dy, p.sx, p.sy);
     return Math.sqrt((forward * forward + backward * backward) / 2);
 }

@@ -1,3 +1,4 @@
+import { bilinearTaps, createBilinearTaps, sampleBilinear } from './bilinear';
 import { gaussianBlur } from './gaussian-blur';
 import { GrayImage } from './image';
 
@@ -13,23 +14,17 @@ function resample(image: GrayImage, width: number, height: number): GrayImage {
     const data = new Float32Array(width * height);
     const ratioX = image.width / width;
     const ratioY = image.height / height;
+    const taps = createBilinearTaps();
     for (let y = 0; y < height; y++) {
-        const fy = Math.min(image.height - 1, Math.max(0, (y + 0.5) * ratioY - 0.5));
-        const y0 = Math.floor(fy);
-        const y1 = Math.min(image.height - 1, y0 + 1);
-        const ay = fy - y0;
         for (let x = 0; x < width; x++) {
-            const fx = Math.min(image.width - 1, Math.max(0, (x + 0.5) * ratioX - 0.5));
-            const x0 = Math.floor(fx);
-            const x1 = Math.min(image.width - 1, x0 + 1);
-            const ax = fx - x0;
-            const top =
-                image.data[y0 * image.width + x0] * (1 - ax) +
-                image.data[y0 * image.width + x1] * ax;
-            const bottom =
-                image.data[y1 * image.width + x0] * (1 - ax) +
-                image.data[y1 * image.width + x1] * ax;
-            data[y * width + x] = top * (1 - ay) + bottom * ay;
+            bilinearTaps(
+                image.width,
+                image.height,
+                (x + 0.5) * ratioX - 0.5,
+                (y + 0.5) * ratioY - 0.5,
+                taps,
+            );
+            data[y * width + x] = sampleBilinear(image.data, taps);
         }
     }
     return { width, height, data };

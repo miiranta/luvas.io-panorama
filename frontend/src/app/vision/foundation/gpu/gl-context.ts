@@ -87,15 +87,10 @@ export class GlContext {
         const gl = this.gl;
         const vertex = this.compile(gl.VERTEX_SHADER, QUAD_VERTEX);
         const fragment = this.compile(gl.FRAGMENT_SHADER, fragmentSource);
-        if (!vertex || !fragment) return null;
-        const program = gl.createProgram();
-        if (!program) return null;
-        gl.attachShader(program, vertex);
-        gl.attachShader(program, fragment);
-        gl.linkProgram(program);
+        const program = vertex && fragment ? this.link(vertex, fragment) : null;
         gl.deleteShader(vertex);
         gl.deleteShader(fragment);
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+        if (!program) return null;
         const vao = gl.createVertexArray();
         if (!vao) return null;
         gl.bindVertexArray(vao);
@@ -107,7 +102,10 @@ export class GlContext {
         const uniforms: Record<string, WebGLUniformLocation> = {};
         for (const name of uniformNames) {
             const found = gl.getUniformLocation(program, name);
-            if (!found) return null;
+            if (!found) {
+                gl.deleteProgram(program);
+                return null;
+            }
             uniforms[name] = found;
         }
         return { program, vao, uniforms };
@@ -115,6 +113,10 @@ export class GlContext {
 
     floatTexture(width: number, height: number): WebGLTexture | null {
         return this.texture(width, height, this.gl.RGBA32F, this.gl.RGBA, this.gl.FLOAT);
+    }
+
+    redFloatTexture(width: number, height: number): WebGLTexture | null {
+        return this.texture(width, height, this.gl.R32F, this.gl.RED, this.gl.FLOAT);
     }
 
     byteTexture(width: number, height: number): WebGLTexture | null {
@@ -200,14 +202,27 @@ export class GlContext {
         return texture;
     }
 
+    private link(vertex: WebGLShader, fragment: WebGLShader): WebGLProgram | null {
+        const gl = this.gl;
+        const program = gl.createProgram();
+        if (!program) return null;
+        gl.attachShader(program, vertex);
+        gl.attachShader(program, fragment);
+        gl.linkProgram(program);
+        if (gl.getProgramParameter(program, gl.LINK_STATUS)) return program;
+        gl.deleteProgram(program);
+        return null;
+    }
+
     private compile(type: number, source: string): WebGLShader | null {
         const gl = this.gl;
         const shader = gl.createShader(type);
         if (!shader) return null;
         gl.shaderSource(shader, source);
         gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
-        return shader;
+        if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader;
+        gl.deleteShader(shader);
+        return null;
     }
 }
 

@@ -26,10 +26,7 @@ function maximumSpanningTree(nodeCount: number, edges: GraphEdge[]): GraphEdge[]
         }
         return root;
     };
-    const sorted = edges
-        .filter((e) => e.verified)
-        .slice()
-        .sort((a, b) => b.inliers - a.inliers);
+    const sorted = edges.filter((e) => e.verified).sort((a, b) => b.inliers - a.inliers);
     const tree: GraphEdge[] = [];
     for (const edge of sorted) {
         const ra = find(edge.a);
@@ -42,27 +39,42 @@ function maximumSpanningTree(nodeCount: number, edges: GraphEdge[]): GraphEdge[]
     return tree;
 }
 
-function connectedComponents(nodeCount: number, edges: readonly GraphEdge[]): number[] {
-    const component = new Array<number>(nodeCount).fill(-1);
+function adjacencyOf(nodeCount: number, edges: readonly GraphEdge[]): number[][] {
     const adjacency: number[][] = Array.from({ length: nodeCount }, () => []);
     for (const edge of edges) {
-        if (!edge.verified) continue;
         adjacency[edge.a].push(edge.b);
         adjacency[edge.b].push(edge.a);
     }
+    return adjacency;
+}
+
+function depthFirst(adjacency: readonly number[][], start: number, visited: Uint8Array): number[] {
+    const order: number[] = [];
+    const stack = [start];
+    visited[start] = 1;
+    while (stack.length > 0) {
+        const node = stack.pop() as number;
+        order.push(node);
+        for (const next of adjacency[node]) {
+            if (visited[next]) continue;
+            visited[next] = 1;
+            stack.push(next);
+        }
+    }
+    return order;
+}
+
+function connectedComponents(nodeCount: number, edges: readonly GraphEdge[]): number[] {
+    const adjacency = adjacencyOf(
+        nodeCount,
+        edges.filter((edge) => edge.verified),
+    );
+    const visited = new Uint8Array(nodeCount);
+    const component = new Array<number>(nodeCount).fill(-1);
     let current = 0;
     for (let start = 0; start < nodeCount; start++) {
-        if (component[start] >= 0) continue;
-        const queue = [start];
-        component[start] = current;
-        while (queue.length > 0) {
-            const node = queue.pop() as number;
-            for (const next of adjacency[node]) {
-                if (component[next] >= 0) continue;
-                component[next] = current;
-                queue.push(next);
-            }
-        }
+        if (visited[start]) continue;
+        for (const node of depthFirst(adjacency, start, visited)) component[node] = current;
         current++;
     }
     return component;
@@ -83,25 +95,7 @@ function largestComponent(component: readonly number[]): number {
 }
 
 function treeOrder(nodeCount: number, tree: readonly GraphEdge[], root: number): number[] {
-    const adjacency: number[][] = Array.from({ length: nodeCount }, () => []);
-    for (const edge of tree) {
-        adjacency[edge.a].push(edge.b);
-        adjacency[edge.b].push(edge.a);
-    }
-    const visited = new Uint8Array(nodeCount);
-    const order: number[] = [];
-    const stack = [root];
-    visited[root] = 1;
-    while (stack.length > 0) {
-        const node = stack.pop() as number;
-        order.push(node);
-        for (const next of adjacency[node]) {
-            if (visited[next]) continue;
-            visited[next] = 1;
-            stack.push(next);
-        }
-    }
-    return order;
+    return depthFirst(adjacencyOf(nodeCount, tree), root, new Uint8Array(nodeCount));
 }
 
 function bestReferenceNode(

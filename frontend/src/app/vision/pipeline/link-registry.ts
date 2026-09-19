@@ -1,6 +1,6 @@
 import { GraphPayload } from '../../core/models/reports';
 import { GraphEdge, PoseGraph } from '../registration/alignment/pose-graph';
-import { yawPitchDegrees } from '../foundation/math/rotation';
+import { pitchDegrees, yawDegrees } from '../foundation/math/rotation';
 import { Keyframe } from './keyframe';
 import { PairLink } from './pair-link';
 
@@ -55,11 +55,10 @@ export class LinkRegistry {
         return new PoseGraph(frames.length, edges);
     }
 
-    compositionOrder(frames: readonly Keyframe[]): number[] {
-        const active = frames.filter((frame) => !frame.rejected);
+    compositionOrder(frames: readonly Keyframe[]): Keyframe[] {
         const ordered = this.panoramaOrder(frames, this.poseGraph(frames));
-        for (const frame of active) if (!ordered.includes(frame.id)) ordered.push(frame.id);
-        return ordered;
+        const placed = new Set(ordered);
+        return [...ordered, ...frames.filter((frame) => !frame.rejected && !placed.has(frame))];
     }
 
     payload(frames: readonly Keyframe[]): GraphPayload {
@@ -69,7 +68,8 @@ export class LinkRegistry {
             nodes: frames.map((frame, index) => ({
                 id: frame.id,
                 label: frame.label,
-                ...yawPitchDegrees(frame.rotation),
+                yaw: yawDegrees(frame.rotation),
+                pitch: pitchDegrees(frame.rotation),
                 keypoints: frame.keypoints.length,
                 rejected: frame.rejected,
                 inMainComponent: graph.inMainComponent(index),
@@ -79,18 +79,17 @@ export class LinkRegistry {
                 a: frames[edge.a].id,
                 b: frames[edge.b].id,
             })),
-            order: this.panoramaOrder(frames, graph),
+            order: this.panoramaOrder(frames, graph).map((frame) => frame.id),
             reference: frames[graph.reference]?.id ?? -1,
             components: graph.componentCount,
         };
     }
 
-    private panoramaOrder(frames: readonly Keyframe[], graph: PoseGraph): number[] {
-        if (graph.traversal.length === 0) return [];
-        const yaw = (frame: Keyframe) => yawPitchDegrees(frame.rotation).yaw;
+    private panoramaOrder(frames: readonly Keyframe[], graph: PoseGraph): Keyframe[] {
         return frames
-            .filter((frame, index) => graph.inMainComponent(index) && !frame.rejected)
-            .sort((a, b) => yaw(a) - yaw(b))
-            .map((frame) => frame.id);
+            .map((frame, index) => ({ frame, index, yaw: yawDegrees(frame.rotation) }))
+            .filter(({ frame, index }) => graph.inMainComponent(index) && !frame.rejected)
+            .sort((a, b) => a.yaw - b.yaw)
+            .map(({ frame }) => frame);
     }
 }

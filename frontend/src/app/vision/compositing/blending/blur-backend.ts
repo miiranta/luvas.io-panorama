@@ -36,6 +36,40 @@ void main() {
     fragColor = total;
 }`;
 
+export interface TextureLevel {
+    texture: WebGLTexture;
+    width: number;
+    height: number;
+    target: GlTarget | null;
+}
+
+export function reduceTextures(
+    context: GlContext,
+    program: GlProgram,
+    base: TextureLevel,
+    levels: number,
+    targetFor: (level: number, width: number, height: number) => GlTarget | null,
+): TextureLevel[] | null {
+    const pyramid = [base];
+    for (let level = 1; level < levels; level++) {
+        const previous = pyramid[level - 1];
+        if (!canReduce(previous)) {
+            pyramid.push(previous);
+            continue;
+        }
+        const width = Math.max(1, previous.width >> 1);
+        const height = Math.max(1, previous.height >> 1);
+        const target = targetFor(level, width, height);
+        if (!target) return null;
+        context.draw(program, target, width, height, () => {
+            context.bindInput(0, previous.texture, program.uniforms['uSource']);
+            context.gl.uniform2i(program.uniforms['uSourceSize'], previous.width, previous.height);
+        });
+        pyramid.push({ texture: target.texture, width, height, target });
+    }
+    return pyramid;
+}
+
 export const cpuBlurBackend: BlurBackend = {
     kind: 'cpu',
     reduceLevels(base: PyramidLevel, levels: number): PyramidLevel[] {
@@ -77,31 +111,30 @@ class GpuBlurBackend implements BlurBackend {
             gl.FLOAT,
             base.data,
         );
+        const textures = reduceTextures(
+            this.context,
+            this.program,
+            {
+                texture: this.source as WebGLTexture,
+                width: base.width,
+                height: base.height,
+                target: null,
+            },
+            levels,
+            (level, width, height) => this.targetFor(level - 1, width, height),
+        );
+        if (!textures) return null;
         const pyramid: PyramidLevel[] = [base];
-        let inputTexture = this.source as WebGLTexture;
-        let inputWidth = base.width;
-        let inputHeight = base.height;
-        for (let level = 1; level < levels; level++) {
-            const previous = pyramid[level - 1];
-            if (!canReduce(previous)) {
-                pyramid.push(previous);
+        for (let level = 1; level < textures.length; level++) {
+            const { target, width, height } = textures[level];
+            if (!target || textures[level] === textures[level - 1]) {
+                pyramid.push(pyramid[level - 1]);
                 continue;
             }
-            const width = Math.max(1, previous.width >> 1);
-            const height = Math.max(1, previous.height >> 1);
-            const target = this.targetFor(level - 1, width, height);
-            if (!target) return null;
-            const uniforms = this.program.uniforms;
-            this.context.draw(this.program, target, width, height, () => {
-                this.context.bindInput(0, inputTexture, uniforms['uSource']);
-                gl.uniform2i(uniforms['uSourceSize'], inputWidth, inputHeight);
-            });
             const data = new Float32Array(width * height * 4);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
             gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, data);
             pyramid.push({ data, width, height });
-            inputTexture = target.texture;
-            inputWidth = width;
-            inputHeight = height;
         }
         return this.context.finish() ? pyramid : null;
     }

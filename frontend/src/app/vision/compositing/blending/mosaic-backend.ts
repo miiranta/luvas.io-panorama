@@ -1,12 +1,16 @@
 import { CpuMosaic } from './cpu-mosaic';
-import { MosaicFactory, MosaicSurface, MosaicView } from './mosaic-surface';
+import { MosaicSurface, MosaicView } from './mosaic-surface';
 import { WarpTile } from '../warping/warp-tile';
 import { cpuBlurBackend } from './blur-backend';
-import { describeBackend } from '../../foundation/gpu/backend-selector';
+import {
+    Backend,
+    BackendSelector,
+    Calibration,
+    RoutedBackend,
+} from '../../foundation/gpu/backend-selector';
 import { GlContext } from '../../foundation/gpu/gl-context';
 import { GpuMosaic } from './gpu-mosaic';
 
-const REQUIRED_SPEEDUP = 0.85;
 const AGREEMENT_MEAN = 0.75;
 const AGREEMENT_MAX = 6;
 const CHECK_WIDTH = 384;
@@ -17,13 +21,6 @@ const WRAP_CANVAS = 1024;
 const WRAP_WIDTH = 384;
 const WRAP_HEIGHT = 320;
 const TIMING_HEIGHT = 1024;
-
-interface Verdict {
-    gpu: boolean;
-    reason: string;
-    gpuMs: number | null;
-    cpuMs: number | null;
-}
 
 function syntheticTile(
     u0: number,
@@ -62,7 +59,7 @@ function compose(surface: MosaicSurface, tiles: readonly WarpTile[]): number[] {
     return values;
 }
 
-function agrees(expected: readonly number[], actual: readonly number[]): boolean {
+function closeEnough(expected: readonly number[], actual: readonly number[]): boolean {
     if (expected.length !== actual.length) return false;
     let total = 0;
     let worst = 0;
@@ -74,98 +71,94 @@ function agrees(expected: readonly number[], actual: readonly number[]): boolean
     return total / expected.length <= AGREEMENT_MEAN && worst <= AGREEMENT_MAX;
 }
 
-export class MosaicBackend {
-    private verdict: Verdict | null = null;
+export interface MosaicMaker extends Backend {
+    create(width: number, height: number, bands: number, view?: MosaicView): MosaicSurface | null;
+}
 
-    factory(enabled: boolean): MosaicFactory {
-        const useGpu = enabled && this.decide().gpu;
-        return (width: number, height: number, bands: number, view?: MosaicView) => {
-            if (useGpu) {
-                const context = GlContext.shared();
-                const gpu = context ? GpuMosaic.create(context, width, height, bands, view) : null;
-                if (gpu) return gpu;
-            }
-            return new CpuMosaic(width, height, bands, view);
-        };
+export const cpuMosaicMaker: MosaicMaker = {
+    kind: 'cpu',
+    create: (width, height, bands, view) => new CpuMosaic(width, height, bands, view),
+};
+
+class GpuMosaicMaker implements MosaicMaker {
+    readonly kind = 'webgl2';
+
+    constructor(private readonly context: GlContext) {}
+
+    create(width: number, height: number, bands: number, view?: MosaicView): MosaicSurface | null {
+        return GpuMosaic.create(this.context, width, height, bands, view);
     }
+}
 
-    describe(enabled: boolean): string {
-        if (!enabled) return 'cpu (disabled)';
-        const { gpu, reason, gpuMs, cpuMs } = this.decide();
-        return describeBackend(gpu ? 'webgl2' : 'cpu', reason, gpuMs, cpuMs);
+class RoutedMosaicMaker extends RoutedBackend<MosaicMaker> implements MosaicMaker {
+    create(width: number, height: number, bands: number, view?: MosaicView): MosaicSurface | null {
+        return this.route(width * height, (maker) => maker.create(width, height, bands, view));
     }
+}
 
-    private decide(): Verdict {
-        if (!this.verdict) {
-            try {
-                this.verdict = this.calibrate();
-            } catch {
-                this.verdict = {
-                    gpu: false,
-                    reason: 'calibration failed',
-                    gpuMs: null,
-                    cpuMs: null,
-                };
-            }
-        }
-        return this.verdict;
-    }
+interface AgreementCase {
+    width: number;
+    height: number;
+    view?: MosaicView;
+    tiles: () => WarpTile[];
+}
 
-    private calibrate(): Verdict {
-        const fallback = (reason: string): Verdict => ({
-            gpu: false,
-            reason,
-            gpuMs: null,
-            cpuMs: null,
-        });
-        const context = GlContext.shared();
-        if (!context) return fallback('no webgl2');
-        if (context.isSoftware) return fallback('software gl');
-        if (!context.blendsFloat) return fallback('no float blending');
-        const checkTiles = [
+const AGREEMENT_CASES: readonly AgreementCase[] = [
+    {
+        width: CHECK_WIDTH,
+        height: CHECK_HEIGHT,
+        tiles: () => [
             syntheticTile(0, 0, 256, 192, 0),
             syntheticTile(64, 64, 256, 192, 1),
             syntheticTile(128, 0, 256, 128, 2),
-        ];
-        const gpuCheck = GpuMosaic.create(context, CHECK_WIDTH, CHECK_HEIGHT, CHECK_BANDS);
-        if (!gpuCheck) return fallback('incomplete webgl2');
-        const expected = compose(new CpuMosaic(CHECK_WIDTH, CHECK_HEIGHT, CHECK_BANDS), checkTiles);
-        const actual = compose(gpuCheck, checkTiles);
-        gpuCheck.dispose();
-        if (!agrees(expected, actual)) return fallback('gpu/cpu mismatch');
-        const view = { u0: WRAP_CANVAS - 128, v0: 64, canvasWidth: WRAP_CANVAS };
-        const wrapTiles = [
+        ],
+    },
+    {
+        width: WRAP_WIDTH,
+        height: WRAP_HEIGHT,
+        view: { u0: WRAP_CANVAS - 128, v0: 64, canvasWidth: WRAP_CANVAS },
+        tiles: () => [
             syntheticTile(WRAP_CANVAS - 192, 64, 256, 192, 3),
             syntheticTile(-64, 128, 256, 128, 4),
-        ];
-        const gpuWrap = GpuMosaic.create(context, WRAP_WIDTH, WRAP_HEIGHT, CHECK_BANDS, view);
-        if (!gpuWrap) return fallback('incomplete webgl2');
-        const expectedWrap = compose(
-            new CpuMosaic(WRAP_WIDTH, WRAP_HEIGHT, CHECK_BANDS, view),
-            wrapTiles,
-        );
-        const actualWrap = compose(gpuWrap, wrapTiles);
-        gpuWrap.dispose();
-        if (!agrees(expectedWrap, actualWrap)) return fallback('gpu/cpu mismatch across the wrap');
-        const timingTiles = [
+        ],
+    },
+];
+
+function composeWith(
+    maker: MosaicMaker,
+    width: number,
+    height: number,
+    tiles: readonly WarpTile[],
+    view?: MosaicView,
+): number[] | null {
+    const surface = maker.create(width, height, CHECK_BANDS, view);
+    if (!surface) return null;
+    const values = compose(surface, tiles);
+    surface.dispose();
+    return values;
+}
+
+const mosaicCalibration: Calibration<MosaicMaker> = {
+    cpu: cpuMosaicMaker,
+    workloads: [TIMING_WIDTH * TIMING_HEIGHT],
+    timingRuns: 1,
+    createGpu: (context) => (context.blendsFloat ? new GpuMosaicMaker(context) : null),
+    agrees(gpu, cpu) {
+        return AGREEMENT_CASES.every(({ width, height, view, tiles }) => {
+            const expected = composeWith(cpu, width, height, tiles(), view);
+            const actual = composeWith(gpu, width, height, tiles(), view);
+            return expected !== null && actual !== null && closeEnough(expected, actual);
+        });
+    },
+    run: (maker) =>
+        composeWith(maker, TIMING_WIDTH, TIMING_HEIGHT, [
             syntheticTile(0, 0, 768, 576, 0),
             syntheticTile(384, 256, 768, 576, 1),
-        ];
-        const time = (create: () => MosaicSurface | null): number | null => {
-            const surface = create();
-            if (!surface) return null;
-            const started = performance.now();
-            compose(surface, timingTiles);
-            const elapsed = performance.now() - started;
-            surface.dispose();
-            return elapsed;
-        };
-        const cpuMs = time(() => new CpuMosaic(TIMING_WIDTH, TIMING_HEIGHT, CHECK_BANDS));
-        const gpuMs = time(() =>
-            GpuMosaic.create(context, TIMING_WIDTH, TIMING_HEIGHT, CHECK_BANDS),
-        );
-        if (cpuMs === null || gpuMs === null) return fallback('measurement failed');
-        const gpu = gpuMs < cpuMs * REQUIRED_SPEEDUP;
-        return { gpu, reason: gpu ? 'gpu faster' : 'cpu faster', gpuMs, cpuMs };
-    }
+        ]) !== null,
+    route: (gpu, cpu, threshold) => new RoutedMosaicMaker(gpu, cpu, threshold),
+    describeWorkload: () => `${TIMING_WIDTH}×${TIMING_HEIGHT}`,
+};
+
+export function createMosaicSelector(): BackendSelector<MosaicMaker> {
+    return new BackendSelector(mosaicCalibration);
 }

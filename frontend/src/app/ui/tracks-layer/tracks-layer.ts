@@ -84,8 +84,15 @@ export class TracksLayer {
 
     private clear(): void {
         const element = this.canvas()?.nativeElement;
-        const context = element?.getContext('2d');
-        if (element && context) context.clearRect(0, 0, element.width, element.height);
+        if (element) this.wipe(element);
+    }
+
+    private wipe(element: HTMLCanvasElement): CanvasRenderingContext2D | null {
+        const context = element.getContext('2d', { desynchronized: true });
+        if (!context) return null;
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.clearRect(0, 0, element.width, element.height);
+        return context;
     }
 
     private paint(overlay: Overlay): void {
@@ -94,12 +101,15 @@ export class TracksLayer {
         const box = (this.host.nativeElement as HTMLElement).getBoundingClientRect();
         if (box.width < 2 || box.height < 2) return;
         const ratio = Math.min(2, window.devicePixelRatio || 1);
-        element.width = Math.round(box.width * ratio);
-        element.height = Math.round(box.height * ratio);
-        const context = element.getContext('2d', { desynchronized: true });
+        const width = Math.round(box.width * ratio);
+        const height = Math.round(box.height * ratio);
+        if (element.width !== width || element.height !== height) {
+            element.width = width;
+            element.height = height;
+        }
+        const context = this.wipe(element);
         if (!context) return;
         context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        context.clearRect(0, 0, box.width, box.height);
 
         const scale = Math.max(box.width / overlay.width, box.height / overlay.height);
         const offsetX = (box.width - overlay.width * scale) / 2;

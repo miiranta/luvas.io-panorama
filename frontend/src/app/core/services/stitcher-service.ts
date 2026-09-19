@@ -13,7 +13,12 @@ import {
     MosaicPayload,
     PreviewPayload,
 } from '../models/reports';
-import { PipelineState, WorkerRequest, WorkerResponse } from '../models/worker-protocol';
+import {
+    PipelineState,
+    WorkerRequest,
+    WorkerResponse,
+    toRasterPayload,
+} from '../models/worker-protocol';
 
 const MIN_RASTER_SIDE = 32;
 
@@ -214,18 +219,8 @@ export class StitcherService {
         if (!frame) return;
         this.previewClock = source.currentTime;
         this.previewInFlight = true;
-        this.send(
-            {
-                kind: 'preview',
-                epoch: this.epoch,
-                work: {
-                    width: frame.width,
-                    height: frame.height,
-                    pixels: frame.data.buffer as ArrayBuffer,
-                },
-            },
-            [frame.data.buffer as ArrayBuffer],
-        );
+        const work = toRasterPayload(frame);
+        this.send({ kind: 'preview', epoch: this.epoch, work }, [work.pixels]);
     }
 
     async capture(source: HTMLVideoElement): Promise<void> {
@@ -234,47 +229,26 @@ export class StitcherService {
         const params = this.params();
         const width = source.videoWidth;
         const height = source.videoHeight;
-        if (!width || !height) {
-            this.error.set('camera has no frame available');
-            this.busy.set(false);
-            return;
-        }
+        if (!width || !height) return this.fail('camera has no frame available');
         const snapshot = new OffscreenCanvas(width, height);
         const snapshotContext = snapshot.getContext('2d');
-        if (!snapshotContext) {
-            this.error.set('failed to freeze the camera frame');
-            this.busy.set(false);
-            return;
-        }
+        if (!snapshotContext) return this.fail('failed to freeze the camera frame');
         snapshotContext.drawImage(source, 0, 0);
         this.sessionWorkWidth ??= params.detect.workWidth;
-        const work = this.rasterize(snapshot, width, height, this.workWidth());
-        const compose = this.rasterize(snapshot, width, height, params.compose.composeWidth);
-        if (!work || !compose) {
-            this.error.set('failed to read the camera frame');
-            this.busy.set(false);
-            return;
-        }
+        const workImage = this.rasterize(snapshot, width, height, this.workWidth());
+        const composeImage = this.rasterize(snapshot, width, height, params.compose.composeWidth);
+        if (!workImage || !composeImage) return this.fail('failed to read the camera frame');
         this.captureIndex += 1;
         const label = `#${String(this.captureIndex).padStart(2, '0')}`;
         this.status.set(`processing ${label}`);
-        this.send(
-            {
-                kind: 'frame',
-                label,
-                work: {
-                    width: work.width,
-                    height: work.height,
-                    pixels: work.data.buffer as ArrayBuffer,
-                },
-                compose: {
-                    width: compose.width,
-                    height: compose.height,
-                    pixels: compose.data.buffer as ArrayBuffer,
-                },
-            },
-            [work.data.buffer as ArrayBuffer, compose.data.buffer as ArrayBuffer],
-        );
+        const work = toRasterPayload(workImage);
+        const compose = toRasterPayload(composeImage);
+        this.send({ kind: 'frame', label, work, compose }, [work.pixels, compose.pixels]);
+    }
+
+    private fail(message: string): void {
+        this.error.set(message);
+        this.busy.set(false);
     }
 
     private workWidth(): number {

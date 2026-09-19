@@ -1,4 +1,5 @@
 import { PipelineParams } from '../../core/models/params';
+import { RasterPayload } from '../../core/models/worker-protocol';
 import { BlurBackend } from '../compositing/blending/blur-backend';
 import { WarpBackend } from '../compositing/warping/warp-backend';
 import {
@@ -12,8 +13,11 @@ import { MosaicFactory, MosaicSurface } from '../compositing/blending/mosaic-sur
 import { ColorImage } from '../foundation/imaging/image';
 import { SeamFinder, SeamStats } from '../compositing/seams/seam-finder';
 import { Warper } from '../compositing/warping/warper';
+import { WarpTile } from '../compositing/warping/warp-tile';
+import { CanvasBox } from '../compositing/warping/canvas-box';
+import { blendTile } from '../compositing/blending/blend-tile';
 import { Mat3 } from '../foundation/math/matrix3';
-import { rotationAngleBetween } from '../foundation/math/rotation';
+import { rotationDegreesBetween } from '../foundation/math/rotation';
 import { CameraSolver } from './camera-solver';
 import { Keyframe } from './keyframe';
 import { KeyframeStore } from './keyframe-store';
@@ -37,12 +41,6 @@ const FALLBACK_WIDTH = 640;
 const FALLBACK_HEIGHT = 480;
 const NO_STATS: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
 
-export interface RasterImage {
-    width: number;
-    height: number;
-    pixels: ArrayBuffer;
-}
-
 export type ProgressReporter = (stage: string, progress: number) => void;
 
 export class MosaicCompositor {
@@ -55,6 +53,7 @@ export class MosaicCompositor {
     private readonly committedGains = new Map<number, number>();
     private readonly committedPlacements = new Map<number, { rotation: Mat3; focal: number }>();
     private readonly stats = new Map<number, SeamStats>();
+    private coverage: number | null = null;
     private readonly photometry: PhotometricCalibrator;
 
     constructor(
@@ -98,25 +97,17 @@ export class MosaicCompositor {
         this.committedGains.clear();
         this.committedPlacements.clear();
         this.stats.clear();
+        this.coverage = null;
     }
 
     async recompose(): Promise<void> {
         const geometry = this.prepareCanvas();
-        const bands = this.params().compose.bands;
-        const previous = this.committed;
-        const reusable =
-            previous !== null &&
-            previous.width === geometry.width &&
-            previous.height === geometry.height &&
-            previous.bands === bands;
-        if (reusable) previous.reset();
-        const mosaic = reusable
-            ? previous
-            : this.createMosaic(geometry.width, geometry.height, bands);
-        const live = new Set(this.liveIds());
+        const mosaic = this.surfaceFor(this.committed, geometry);
+        const live = this.liveIds();
+        const ordered = this.orderedFrames();
         this.stats.clear();
         for (const frame of this.frames.all) frame.uncommit();
-        const pending = this.orderedFrames().filter((frame) => !live.has(frame.id));
+        const pending = ordered.filter((frame) => !live.has(frame.id));
         let done = 0;
         for (const frame of pending) {
             this.report('compositing mosaic', done / Math.max(1, pending.length));
@@ -126,7 +117,7 @@ export class MosaicCompositor {
         if (this.committed !== mosaic) this.committed?.dispose();
         this.committed = mosaic;
         this.rememberCommitted(geometry);
-        await this.rebuildPreview(geometry);
+        await this.rebuildPreview(geometry, ordered, live);
     }
 
     async integrate(): Promise<void> {
@@ -139,16 +130,22 @@ export class MosaicCompositor {
             await this.recompose();
             return;
         }
-        const live = new Set(this.liveIds());
-        for (const frame of this.orderedFrames()) {
+        const live = this.liveIds();
+        const ordered = this.orderedFrames();
+        for (const frame of ordered) {
             if (frame.committed || live.has(frame.id)) continue;
             await this.commit(frame, geometry, this.committed);
         }
         this.rememberCommitted(geometry);
-        await this.rebuildPreview(geometry);
+        await this.rebuildPreview(geometry, ordered, live);
     }
 
     coveragePercent(): number {
+        this.coverage ??= this.measureCoverage();
+        return this.coverage;
+    }
+
+    private measureCoverage(): number {
         const mosaic = this.committed;
         const box = mosaic?.boundingBox(this.preview);
         if (!mosaic || !box) return 0;
@@ -162,7 +159,7 @@ export class MosaicCompositor {
         return angularSpan(this.canvas, box);
     }
 
-    render(crop: boolean, margin = 0): RasterImage | null {
+    render(crop: boolean, margin = 0): RasterPayload | null {
         if (!this.committed) return null;
         const useBands = this.params().compose.blend === 'multiband';
         const box = crop ? this.committed.boundingBox(this.preview) : null;
@@ -189,11 +186,11 @@ export class MosaicCompositor {
         const exporter = new PanoramaExporter({
             params: this.params,
             blur: this.blur,
-            warp: this.warpBackend,
             createMosaic: this.createMosaic,
-            focalFor: (frame) => this.cameras.focalFor(frame),
+            focalAt: (frame, width) => this.cameras.focalAt(frame, width),
             distortion: () => this.cameras.distortion,
-            vignetting: () => this.vignetting,
+            warpFrame: (geometry, frame, source, clip) =>
+                this.warpFrame(geometry, frame, source, clip),
             orientation: () =>
                 this.canvas?.orientation ?? createCanvasGeometry('planar', 64, 1).orientation,
             report: this.report,
@@ -236,16 +233,14 @@ export class MosaicCompositor {
         }
         if (Math.abs(this.vignetting - this.committedVignetting) > VIGNETTING_TOLERANCE)
             return true;
-        const twist =
-            (rotationAngleBetween(geometry.orientation, previous.orientation) * 180) / Math.PI;
+        const twist = rotationDegreesBetween(geometry.orientation, previous.orientation);
         if (twist > PREVIEW_TWIST_DEGREES) return true;
         for (const frame of this.frames.active) {
             const gain = this.committedGains.get(frame.id);
             if (gain !== undefined && Math.abs(gain - frame.gain) > GAIN_TOLERANCE) return true;
             const placement = this.committedPlacements.get(frame.id);
             if (!placement) continue;
-            const moved =
-                (rotationAngleBetween(frame.rotation, placement.rotation) * 180) / Math.PI;
+            const moved = rotationDegreesBetween(frame.rotation, placement.rotation);
             if (moved > PLACEMENT_DEGREES) return true;
             const focal = this.cameras.focalFor(frame);
             if (Math.abs(focal / placement.focal - 1) > FOCAL_TOLERANCE) return true;
@@ -269,45 +264,51 @@ export class MosaicCompositor {
         }
     }
 
-    private liveIds(): number[] {
+    private liveIds(): Set<number> {
         const configured = Math.max(1, Math.round(this.params().global.bundleWindow) || 1);
         const window = Math.min(configured, PREVIEW_LIVE_FRAMES);
         const recent = this.frames.active.slice(-window);
         const live = recent.filter(
             (frame) =>
                 !frame.composedRotation ||
-                (rotationAngleBetween(frame.rotation, frame.composedRotation) * 180) / Math.PI >
-                    STABLE_DEGREES,
+                rotationDegreesBetween(frame.rotation, frame.composedRotation) > STABLE_DEGREES,
         );
         const newest = recent.at(-1);
         if (newest && !live.includes(newest)) live.push(newest);
-        return live.map((frame) => frame.id);
+        return new Set(live.map((frame) => frame.id));
     }
 
     private orderedFrames(): Keyframe[] {
-        return this.links
-            .compositionOrder(this.frames.all)
-            .map((id) => this.frames.byId(id))
-            .filter((frame): frame is Keyframe => frame !== undefined && !frame.rejected);
+        return this.links.compositionOrder(this.frames.all);
     }
 
-    private async rebuildPreview(geometry: CanvasGeometry): Promise<void> {
-        const live = new Set(this.liveIds());
+    private surfaceFor(existing: MosaicSurface | null, geometry: CanvasGeometry): MosaicSurface {
         const bands = this.params().compose.bands;
-        const reusable =
-            this.preview?.width === geometry.width &&
-            this.preview.height === geometry.height &&
-            this.preview.bands === bands;
-        if (!reusable) this.preview?.dispose();
-        const preview = reusable
-            ? (this.preview as MosaicSurface)
-            : this.createMosaic(geometry.width, geometry.height, bands);
-        preview.reset();
-        for (const frame of this.orderedFrames()) {
+        if (
+            existing &&
+            existing.width === geometry.width &&
+            existing.height === geometry.height &&
+            existing.bands === bands
+        ) {
+            existing.reset();
+            return existing;
+        }
+        return this.createMosaic(geometry.width, geometry.height, bands);
+    }
+
+    private async rebuildPreview(
+        geometry: CanvasGeometry,
+        ordered: readonly Keyframe[],
+        live: ReadonlySet<number>,
+    ): Promise<void> {
+        const preview = this.surfaceFor(this.preview, geometry);
+        if (this.preview !== preview) this.preview?.dispose();
+        for (const frame of ordered) {
             if (!live.has(frame.id)) continue;
             this.stats.set(frame.id, await this.draw(frame, geometry, preview, this.committed));
         }
         this.preview = preview;
+        this.coverage = null;
     }
 
     private async commit(
@@ -319,6 +320,23 @@ export class MosaicCompositor {
         frame.commit();
     }
 
+    private warpFrame(
+        geometry: CanvasGeometry,
+        frame: Keyframe,
+        source: ColorImage,
+        clip: CanvasBox | null = null,
+    ): WarpTile | null {
+        return new Warper(geometry, this.params().compose, this.warpBackend()).warp(
+            frame.rotation,
+            source,
+            this.cameras.focalAt(frame, source.width),
+            frame.gain,
+            this.cameras.distortion,
+            this.vignetting,
+            clip,
+        );
+    }
+
     private async draw(
         frame: Keyframe,
         geometry: CanvasGeometry,
@@ -326,37 +344,11 @@ export class MosaicCompositor {
         reference: MosaicSurface | null,
     ): Promise<SeamStats> {
         const source = await frame.composeImage();
-        if (!source) return NO_STATS;
-        return this.drawSource(frame, source, geometry, mosaic, reference);
-    }
-
-    private async drawSource(
-        frame: Keyframe,
-        source: ColorImage,
-        geometry: CanvasGeometry,
-        mosaic: MosaicSurface,
-        reference: MosaicSurface | null,
-    ): Promise<SeamStats> {
-        const params = this.params().compose;
-        const focal = this.cameras.focalFor(frame) * (source.width / frame.workWidth);
-        const tile = new Warper(geometry, params, this.warpBackend()).warp(
-            frame.rotation,
-            source,
-            focal,
-            frame.gain,
-            this.cameras.distortion,
-            this.vignetting,
-        );
+        const tile = source ? this.warpFrame(geometry, frame, source) : null;
         if (!tile) return NO_STATS;
+        const params = this.params().compose;
         const stats = new SeamFinder(params).cut(mosaic, tile, reference);
-        if (params.blend === 'multiband') {
-            mosaic.addPyramidBands(tile, this.blur());
-            return stats;
-        }
-        if (params.blend === 'average') {
-            for (let i = 0; i < tile.mask.length; i++) tile.mask[i] = tile.mask[i] > 0 ? 1 : 0;
-        }
-        mosaic.addFlat(tile);
+        blendTile(mosaic, tile, params.blend, this.blur());
         return stats;
     }
 }

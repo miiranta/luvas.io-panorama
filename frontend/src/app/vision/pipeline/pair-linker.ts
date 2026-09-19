@@ -7,7 +7,7 @@ import { ModelFit, RansacEstimator } from '../registration/estimation/ransac-est
 import { focalFromHomography } from '../registration/alignment/rotational-camera';
 import { undistort } from '../registration/alignment/lens-distortion';
 import { Correspondence } from '../registration/estimation/correspondence';
-import { ColorImage } from '../foundation/imaging/image';
+import { ColorImage, luma } from '../foundation/imaging/image';
 import { Mat3 } from '../foundation/math/matrix3';
 import { Keyframe } from './keyframe';
 import { IntensitySample, PairLink } from './pair-link';
@@ -129,7 +129,7 @@ export class PairLinker {
 
     link(query: Keyframe, train: Keyframe, pair: FittedPair): PairLink {
         const { fit, correspondences } = pair;
-        const accepted = pair.matches.filter((match) => match.accepted).length;
+        const accepted = correspondences.length;
         const intensities = intensitySamples(query, train, pair);
         const [meanIntensityA, meanIntensityB] = meanIntensities(intensities);
         return {
@@ -150,9 +150,8 @@ export class PairLinker {
     }
 
     report(train: Keyframe, pair: PairMatch, link: PairLink | null): PairReport {
-        const accepted = pair.matches.filter((match) => match.accepted).length;
+        const accepted = pair.correspondences.length;
         return {
-            trainId: train.id,
             inliers: link?.inliers ?? 0,
             inlierRatio: link && accepted > 0 ? link.inliers / accepted : 0,
             meanError: pair.fit?.meanError ?? Number.POSITIVE_INFINITY,
@@ -193,21 +192,18 @@ function sampleObservations(
 
 function overlapArea(query: Keyframe, train: Keyframe, matrix: Mat3): number {
     let inside = 0;
-    let total = 0;
     for (let row = 0; row < OVERLAP_SAMPLES; row++) {
         for (let column = 0; column < OVERLAP_SAMPLES; column++) {
             const sx = ((column + 0.5) / OVERLAP_SAMPLES) * query.workWidth;
             const sy = ((row + 0.5) / OVERLAP_SAMPLES) * query.workHeight;
             const w = matrix[6] * sx + matrix[7] * sy + matrix[8];
-            total++;
             if (Math.abs(w) < 1e-9) continue;
             const dx = (matrix[0] * sx + matrix[1] * sy + matrix[2]) / w;
             const dy = (matrix[3] * sx + matrix[4] * sy + matrix[5]) / w;
             if (dx >= 0 && dy >= 0 && dx < train.workWidth && dy < train.workHeight) inside++;
         }
     }
-    if (total === 0) return 0;
-    return (inside / total) * query.workWidth * query.workHeight;
+    return (inside / (OVERLAP_SAMPLES * OVERLAP_SAMPLES)) * query.workWidth * query.workHeight;
 }
 
 function intensitySamples(query: Keyframe, train: Keyframe, pair: FittedPair): IntensitySample[] {
@@ -245,7 +241,7 @@ function patchMean(image: ColorImage, x: number, y: number): number | null {
             const px = cx + dx;
             if (px < 0 || px >= image.width) continue;
             const i = (py * image.width + px) * 4;
-            sum += 0.299 * image.data[i] + 0.587 * image.data[i + 1] + 0.114 * image.data[i + 2];
+            sum += luma(image.data[i], image.data[i + 1], image.data[i + 2]);
             count++;
         }
     }

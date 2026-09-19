@@ -1,7 +1,7 @@
 import { Mat3, mat3Multiply, mat3MultiplyTransposed } from '../../foundation/math/matrix3';
 import { nearestRotation, rotationFromAxisAngle } from '../../foundation/math/rotation';
 import { solveSymmetric } from '../../foundation/math/cholesky';
-import { MAX_DISTORTION, undistort } from './lens-distortion';
+import { MAX_DISTORTION, distortFactor, undistort } from './lens-distortion';
 
 const HUBER_SIGMA = 2;
 const ANGLE_PRIOR = Math.PI / 16;
@@ -72,6 +72,25 @@ function cross(ax: number, ay: number, az: number, axis: number, out: Float64Arr
     out[0] = -ay;
     out[1] = ax;
     out[2] = 0;
+}
+
+function forEachDirection(
+    observation: BundleObservation,
+    index: number,
+    visit: (
+        target: number,
+        source: number,
+        sx: number,
+        sy: number,
+        tx: number,
+        ty: number,
+        scale: number,
+        slot: number,
+    ) => void,
+): void {
+    const { cameraA, cameraB, ax, ay, bx, by } = observation;
+    visit(cameraA, cameraB, bx, by, ax, ay, observation.scaleA ?? 1, index * 4);
+    visit(cameraB, cameraA, ax, ay, bx, by, observation.scaleB ?? 1, index * 4 + 2);
 }
 
 export class BundleAdjuster {
@@ -269,39 +288,25 @@ export class BundleAdjuster {
         weights: Float64Array | null,
     ): number {
         let cost = 0;
-        this.observations.forEach((observation, index) => {
-            const base = index * 4;
-            cost += this.residualPair(
-                rotations,
-                focal,
-                distortion,
-                observation.cameraA,
-                observation.cameraB,
-                observation.bx,
-                observation.by,
-                observation.ax,
-                observation.ay,
-                observation.scaleA ?? 1,
-                base,
-                residuals,
-                weights,
-            );
-            cost += this.residualPair(
-                rotations,
-                focal,
-                distortion,
-                observation.cameraB,
-                observation.cameraA,
-                observation.ax,
-                observation.ay,
-                observation.bx,
-                observation.by,
-                observation.scaleB ?? 1,
-                base + 2,
-                residuals,
-                weights,
-            );
-        });
+        this.observations.forEach((observation, index) =>
+            forEachDirection(observation, index, (target, source, sx, sy, tx, ty, scale, slot) => {
+                cost += this.residualPair(
+                    rotations,
+                    focal,
+                    distortion,
+                    target,
+                    source,
+                    sx,
+                    sy,
+                    tx,
+                    ty,
+                    scale,
+                    slot,
+                    residuals,
+                    weights,
+                );
+            }),
+        );
         return cost;
     }
 
@@ -331,7 +336,7 @@ export class BundleAdjuster {
             return 4 * HUBER_SIGMA * HUBER_SIGMA;
         }
         const { nx, ny } = projected;
-        const factor = 1 + distortion * (nx * nx + ny * ny);
+        const factor = distortFactor(nx, ny, distortion);
         const ex = this.cx + focal * factor * nx - tx;
         const ey = this.cy + focal * factor * ny - ty;
         residuals[slot] = ex;
@@ -385,25 +390,11 @@ export class BundleAdjuster {
     private buildJacobian(rotations: Mat3[]): void {
         this.jacobian.fill(0);
         this.columns.fill(-1);
-        this.observations.forEach((observation, index) => {
-            const base = index * 4;
-            this.jacobianPair(
-                rotations,
-                observation.cameraA,
-                observation.cameraB,
-                observation.bx,
-                observation.by,
-                base,
-            );
-            this.jacobianPair(
-                rotations,
-                observation.cameraB,
-                observation.cameraA,
-                observation.ax,
-                observation.ay,
-                base + 2,
-            );
-        });
+        this.observations.forEach((observation, index) =>
+            forEachDirection(observation, index, (target, source, sx, sy, _tx, _ty, _scale, slot) =>
+                this.jacobianPair(rotations, target, source, sx, sy, slot),
+            ),
+        );
         if (this.focalParam >= 0) {
             const step = Math.max(0.05, this.focal * 1e-5);
             this.evaluate(rotations, this.focal + step, this.distortion, this.probePlus, null);
@@ -440,7 +431,7 @@ export class BundleAdjuster {
         const projected = this.project(rotations, focal, kappa, target, source, sx, sy);
         if (!projected.valid) return;
         const { nx, ny, vx, vy, vz, wx, wy } = projected;
-        const factor = 1 + kappa * (nx * nx + ny * ny);
+        const factor = distortFactor(nx, ny, kappa);
         const lxx = focal * (factor + 2 * kappa * nx * nx);
         const lxy = focal * (2 * kappa * nx * ny);
         const lyy = focal * (factor + 2 * kappa * ny * ny);

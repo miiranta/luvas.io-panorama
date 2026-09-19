@@ -11,6 +11,7 @@ import {
     viewChild,
 } from '@angular/core';
 import { StitcherService } from '../../core/services/stitcher-service';
+import { paintRaster } from '../shared/paint-raster';
 
 const REVOKE_DELAY_MS = 60_000;
 
@@ -47,15 +48,7 @@ export class PanoramaLayer {
             element.height = mosaic.height;
             const context = element.getContext('2d');
             if (!context) return;
-            context.putImageData(
-                new ImageData(
-                    new Uint8ClampedArray(mosaic.pixels.slice(0)),
-                    mosaic.width,
-                    mosaic.height,
-                ),
-                0,
-                0,
-            );
+            paintRaster(context, mosaic.pixels, mosaic.width, mosaic.height);
         });
     }
 

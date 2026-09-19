@@ -8,6 +8,7 @@ import {
     RoutedBackend,
 } from '../../foundation/gpu/backend-selector';
 import { GlContext, GlProgram, GlTarget } from '../../foundation/gpu/gl-context';
+import { LruCache } from '../../foundation/cache/lru-cache';
 import { SeparableBlur } from '../../foundation/gpu/separable-blur';
 
 const CALIBRATION_SIZES: readonly [number, number][] = [
@@ -21,7 +22,6 @@ const MAX_ALLOCATIONS = 8;
 interface DetectAllocation {
     source: WebGLTexture;
     targets: GlTarget[];
-    upload: Float32Array;
 }
 const MEAN_TOLERANCE = 0.01;
 
@@ -87,7 +87,10 @@ export const cpuDetectBackend: DetectBackend = {
 
 class GpuDetectBackend implements DetectBackend {
     readonly kind = 'webgl2';
-    private readonly allocations = new Map<string, DetectAllocation>();
+    private readonly allocations = new LruCache<string, DetectAllocation>(
+        MAX_ALLOCATIONS,
+        (allocation) => this.release(allocation),
+    );
 
     private constructor(
         private readonly context: GlContext,
@@ -117,10 +120,9 @@ class GpuDetectBackend implements DetectBackend {
         const allocation = this.allocate(width, height);
         if (!allocation) return null;
         const gl = this.context.gl;
-        const upload = allocation.upload;
-        for (let i = 0; i < width * height; i++) upload[i * 4] = image.data[i];
+
         gl.bindTexture(gl.TEXTURE_2D, allocation.source);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.FLOAT, upload);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RED, gl.FLOAT, image.data);
 
         const [a, b, c, d] = allocation.targets;
         this.blur.apply(allocation.source, params.derivativeSigma, a, b);
@@ -152,37 +154,29 @@ class GpuDetectBackend implements DetectBackend {
     private allocate(width: number, height: number): DetectAllocation | null {
         const key = `${width}x${height}`;
         const cached = this.allocations.get(key);
-        if (cached) {
-            this.allocations.delete(key);
-            this.allocations.set(key, cached);
-            return cached;
-        }
-        const source = this.context.floatTexture(width, height);
+        if (cached) return cached;
+        const source = this.context.redFloatTexture(width, height);
         if (!source) return null;
-        const targets: GlTarget[] = [];
+        const allocation: DetectAllocation = { source, targets: [] };
         for (let i = 0; i < 4; i++) {
             const target = this.context.target(
                 this.context.floatTexture(width, height),
                 width,
                 height,
             );
-            if (!target) return null;
-            targets.push(target);
+            if (!target) {
+                this.release(allocation);
+                return null;
+            }
+            allocation.targets.push(target);
         }
-        const upload = new Float32Array(width * height * 4);
-        for (let i = 0; i < width * height; i++) upload[i * 4 + 3] = 1;
-        const allocation = { source, targets, upload };
         this.allocations.set(key, allocation);
-        if (this.allocations.size > MAX_ALLOCATIONS) {
-            const [oldestKey, oldest] = this.allocations.entries().next().value as [
-                string,
-                DetectAllocation,
-            ];
-            this.allocations.delete(oldestKey);
-            this.context.gl.deleteTexture(oldest.source);
-            for (const target of oldest.targets) this.context.release(target);
-        }
         return allocation;
+    }
+
+    private release(allocation: DetectAllocation): void {
+        this.context.gl.deleteTexture(allocation.source);
+        for (const target of allocation.targets) this.context.release(target);
     }
 }
 

@@ -22,7 +22,8 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm test -- --watch=false           # 81 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
+npm test -- --watch=false           # 90 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
+npm run typecheck                   # tipos da app, do worker, dos testes e das ferramentas
 npm run verify                      # 82 checagens numéricas contra ground truth sintético
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
 npm run e2e                         # 29 checagens ponta a ponta em Chrome headless
@@ -368,14 +369,15 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 - `camera-stage` — vídeo, HUD, disparador e botões; `tracks-layer` — linhas de casamento sobre o vídeo;
   `panorama-layer` — minimapa e exportação; `settings-sheet` — parâmetros; `insights-sheet` —
   diagnóstico, grafo e custos; `match-dialog` — comparação lado a lado; `confirm-dialog` — confirmação
-  genérica; `busy-veil` — indicador de trabalho.
+  genérica; `busy-veil` — indicador de trabalho; `shared/paint-raster.ts` — pinta pixels num canvas.
 
 **vision/foundation/** — base usada por todas as etapas
 - `math/matrix3.ts` — álgebra de matrizes 3×3; `rotation.ts` — rotações (Rodrigues, rotação mais próxima,
   ângulo entre rotações, eixo óptico, yaw/pitch); `jacobi-eigen.ts` — autovalores de matriz simétrica;
   `gaussian-elimination.ts` — sistema linear com pivoteamento; `cholesky.ts` — sistema simétrico
-  definido positivo; `median.ts` — mediana.
-- `imaging/image.ts` — tipos de imagem, luminância e centro óptico; `bilinear.ts` — interpolação
+  definido positivo; `median.ts` — mediana; `angles.ts` — radianos para graus.
+- `cache/lru-cache.ts` — cache LRU com aviso de descarte (texturas da detecção, fotos da exportação).
+- `imaging/image.ts` — tipos de imagem, luminância (`luma`) e centro óptico; `bilinear.ts` — interpolação
   bilinear para qualquer número de canais; `gaussian-blur.ts` — filtro gaussiano separável;
   `sobel-gradients.ts` — gradiente de Sobel; `gray-pyramid.ts` — pirâmide de escalas para detecção.
 - `gpu/gl-context.ts` — contexto WebGL2 compartilhado, programas e alvos; `separable-blur.ts` —
@@ -414,8 +416,9 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 - `seams/seam-finder.ts` — costura de menor custo e rampa a partir dela.
 - `blending/gaussian-pyramid.ts` — reduzir/expandir; `mosaic-surface.ts` — contrato de um mosaico;
   `mosaic-grid.ts` — janela na tela, emenda de 360°, cobertura e retratos; `cpu-mosaic.ts`,
-  `gpu-mosaic.ts` — acumuladores multibanda e planos; `blur-backend.ts` — pirâmide na GPU;
-  `mosaic-backend.ts` — escolhe entre mosaico de CPU e de GPU.
+  `gpu-mosaic.ts` — acumuladores multibanda e planos; `blend-tile.ts` — soma um bloco conforme o
+  modo de mistura; `blur-backend.ts` — pirâmide na GPU; `mosaic-backend.ts` — calibração do mosaico
+  de GPU para o `BackendSelector`.
 - `export/panorama-exporter.ts` — exportação em blocos com costura global; `png-writer.ts` — PNG em fluxo.
 
 **vision/pipeline/** — orquestração
@@ -427,7 +430,7 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
   — mosaicos, prévia e decisão de recompor; `live-tracker.ts` — casamento ao vivo.
 
 **tools/** — `verify.ts` (checagens numéricas), `e2e.mjs` (navegador real), `profile.mjs` (custo por
-etapa), `devtools.mjs` (Chrome headless compartilhado), `scene.ts` (cena sintética), `fakecam.ts`
+etapa), `devtools.mjs` (Chrome headless compartilhado; `tsconfig.tools.json` confere os tipos), `scene.ts` (cena sintética), `fakecam.ts`
 (vídeo da câmera falsa), `polyfill.mjs` (`ImageData` no Node).
 
 `StitchPipeline.addFrame` lê como o enunciado: `features.extract` → `linkToNeighbours` (casamento

@@ -69,6 +69,19 @@ class MinHeap {
     }
 }
 
+function forEachNeighbor(
+    cell: number,
+    width: number,
+    cells: number,
+    visit: (neighbor: number) => void,
+): void {
+    const x = cell % width;
+    if (x > 0) visit(cell - 1);
+    if (x < width - 1) visit(cell + 1);
+    if (cell >= width) visit(cell - width);
+    if (cell + width < cells) visit(cell + width);
+}
+
 function seamDistance(
     label: Int8Array,
     overlap: Uint8Array,
@@ -86,21 +99,51 @@ function seamDistance(
     }
     while (head < tail) {
         const current = queue[head++];
-        const x = current % width;
         const next = distance[current] + 1;
-        for (const offset of [-1, 1, -width, width]) {
-            const neighbor = current + offset;
-            if (neighbor < 0 || neighbor >= cells) continue;
-            if (offset === -1 && x === 0) continue;
-            if (offset === 1 && x === width - 1) continue;
-            if (!overlap[neighbor] || label[neighbor] !== 1 || distance[neighbor] <= next) {
-                continue;
-            }
+        forEachNeighbor(current, width, cells, (neighbor) => {
+            if (!overlap[neighbor] || label[neighbor] !== 1 || distance[neighbor] <= next) return;
             distance[neighbor] = next;
             queue[tail++] = neighbor;
-        }
+        });
     }
     return distance;
+}
+
+function growLabels(
+    mine: TileSnapshot,
+    other: TileSnapshot | null,
+    overlap: Uint8Array,
+    present: Uint8Array,
+    difference: Float32Array,
+): Int8Array {
+    const cells = mine.width * mine.height;
+    const cost = new Float64Array(cells).fill(Number.POSITIVE_INFINITY);
+    const label = new Int8Array(cells).fill(-1);
+    const heap = new MinHeap();
+    for (let cell = 0; cell < cells; cell++) {
+        if (overlap[cell]) continue;
+        const seed = present[cell] ? 1 : mine.covered[cell] || other?.covered[cell] ? 0 : -1;
+        if (seed < 0) continue;
+        cost[cell] = 0;
+        label[cell] = seed;
+        heap.push(0, cell, seed);
+    }
+    while (heap.pop()) {
+        const current = heap.index;
+        const currentCost = heap.cost;
+        const currentLabel = heap.label;
+        if (currentCost > cost[current] + 1e-9) continue;
+        forEachNeighbor(current, mine.width, cells, (next) => {
+            if (!overlap[next]) return;
+            const candidate = currentCost + (1 + difference[next] * difference[next]);
+            if (candidate < cost[next]) {
+                cost[next] = candidate;
+                label[next] = currentLabel;
+                heap.push(candidate, next, currentLabel);
+            }
+        });
+    }
+    return label;
 }
 
 export interface SeamStats {
@@ -113,12 +156,47 @@ export class SeamFinder {
 
     cut(mosaic: MosaicSurface, tile: WarpTile, reference: MosaicSurface | null = null): SeamStats {
         const params = this.params;
-        const stats: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
         const step = this.step(tile);
         const mine = mosaic.snapshot(tile, step);
-        const other: TileSnapshot | null = reference ? reference.snapshot(tile, step) : null;
-        const width = mine.width;
-        const height = mine.height;
+        const other = reference ? reference.snapshot(tile, step) : null;
+        const { width, height } = mine;
+        const { stats, overlap, difference, present } = this.measureOverlap(
+            tile,
+            step,
+            mine,
+            other,
+        );
+        const ghost = (cell: number) =>
+            params.deghost && difference[cell] > params.deghostThreshold ? 0 : -1;
+        if (stats.overlapPixels === 0) return stats;
+        if (!params.seam) {
+            if (params.deghost) {
+                this.applyCells(tile, step, width, height, (cell) =>
+                    overlap[cell] ? ghost(cell) : -1,
+                );
+            }
+            return stats;
+        }
+        const label = growLabels(mine, other, overlap, present, difference);
+        const ramp = Math.max(1, params.featherWidth / 6 / step);
+        const distance = seamDistance(label, overlap, width, width * height);
+        this.applyCells(tile, step, width, height, (cell, current) => {
+            if (!overlap[cell]) return -1;
+            if (label[cell] === 0) return 0;
+            if (label[cell] === 1) return Math.min(current, distance[cell] / ramp);
+            return ghost(cell);
+        });
+        return stats;
+    }
+
+    private measureOverlap(
+        tile: WarpTile,
+        step: number,
+        mine: TileSnapshot,
+        other: TileSnapshot | null,
+    ): { stats: SeamStats; overlap: Uint8Array; difference: Float32Array; present: Uint8Array } {
+        const stats: SeamStats = { overlapPixels: 0, inconsistentPixels: 0 };
+        const { width, height } = mine;
         const cells = width * height;
         const overlap = new Uint8Array(cells);
         const difference = new Float32Array(cells);
@@ -140,66 +218,10 @@ export class SeamFinder {
                         Math.abs(snapshot.mean[cell * 3 + 2] - tile.color[source * 3 + 2])) /
                     3;
                 difference[cell] = d;
-                if (d > params.deghostThreshold) stats.inconsistentPixels += step * step;
+                if (d > this.params.deghostThreshold) stats.inconsistentPixels += step * step;
             }
         }
-        if (stats.overlapPixels === 0) return stats;
-        if (!params.seam) {
-            if (params.deghost) {
-                this.applyCells(tile, step, width, height, (cell) =>
-                    overlap[cell] && difference[cell] > params.deghostThreshold ? 0 : -1,
-                );
-            }
-            return stats;
-        }
-        const cost = new Float64Array(cells).fill(Number.POSITIVE_INFINITY);
-        const label = new Int8Array(cells).fill(-1);
-        const heap = new MinHeap();
-        for (let cell = 0; cell < cells; cell++) {
-            if (overlap[cell]) continue;
-            if (present[cell]) {
-                cost[cell] = 0;
-                label[cell] = 1;
-                heap.push(0, cell, 1);
-                continue;
-            }
-            if (mine.covered[cell] || other?.covered[cell]) {
-                cost[cell] = 0;
-                label[cell] = 0;
-                heap.push(0, cell, 0);
-            }
-        }
-        const neighbors = [-1, 1, -width, width];
-        while (heap.pop()) {
-            const current = heap.index;
-            const currentCost = heap.cost;
-            const currentLabel = heap.label;
-            if (currentCost > cost[current] + 1e-9) continue;
-            const x = current % width;
-            for (const offset of neighbors) {
-                const next = current + offset;
-                if (next < 0 || next >= cells) continue;
-                if (offset === -1 && x === 0) continue;
-                if (offset === 1 && x === width - 1) continue;
-                if (!overlap[next]) continue;
-                const stepCost = 1 + difference[next] * difference[next];
-                const candidate = currentCost + stepCost;
-                if (candidate < cost[next]) {
-                    cost[next] = candidate;
-                    label[next] = currentLabel;
-                    heap.push(candidate, next, currentLabel);
-                }
-            }
-        }
-        const ramp = Math.max(1, params.featherWidth / 6 / step);
-        const distance = seamDistance(label, overlap, width, cells);
-        this.applyCells(tile, step, width, height, (cell, current) => {
-            if (!overlap[cell]) return -1;
-            if (label[cell] === 0) return 0;
-            if (label[cell] === 1) return Math.min(current, distance[cell] / ramp);
-            return params.deghost && difference[cell] > params.deghostThreshold ? 0 : -1;
-        });
-        return stats;
+        return { stats, overlap, difference, present };
     }
 
     private step(tile: WarpTile): number {

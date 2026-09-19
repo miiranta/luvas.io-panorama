@@ -8,7 +8,7 @@ import { CanvasBox } from '../warping/canvas-box';
 import { MosaicSurface, MosaicView, TileSnapshot } from './mosaic-surface';
 import { MosaicGrid } from './mosaic-grid';
 import { PyramidLevel, expandLevel, gaussianPyramid } from './gaussian-pyramid';
-import { WarpTile } from '../warping/warp-tile';
+import { WarpTile, premultipliedTile } from '../warping/warp-tile';
 
 export class CpuMosaic extends MosaicGrid implements MosaicSurface {
     readonly kind = 'cpu';
@@ -82,19 +82,6 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         this.markCoverage(tile);
     }
 
-    private premultiply(tile: WarpTile): Float32Array {
-        const n = tile.width * tile.height;
-        const base = new Float32Array(n * 4);
-        for (let i = 0; i < n; i++) {
-            const mask = tile.mask[i];
-            base[i * 4] = tile.color[i * 3] * mask;
-            base[i * 4 + 1] = tile.color[i * 3 + 1] * mask;
-            base[i * 4 + 2] = tile.color[i * 3 + 2] * mask;
-            base[i * 4 + 3] = mask;
-        }
-        return base;
-    }
-
     private accumulateLevel(
         tile: WarpTile,
         level: number,
@@ -142,7 +129,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
 
     addPyramidBands(tile: WarpTile, blur: BlurBackend = cpuBlurBackend): void {
         const base: PyramidLevel = {
-            data: this.premultiply(tile),
+            data: premultipliedTile(tile),
             width: tile.width,
             height: tile.height,
         };
@@ -232,12 +219,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const out = new Uint8ClampedArray(width * height * 4);
-        const sameShape =
-            overlay instanceof CpuMosaic &&
-            overlay.width === this.width &&
-            overlay.height === this.height &&
-            overlay.bands === this.bands;
-        const extra = sameShape ? overlay : null;
+        const extra = overlay instanceof CpuMosaic && this.sameGrid(overlay) ? overlay : null;
         const collapsed = useBands ? this.collapseRegion(extra, box).data : null;
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {

@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { StitcherService } from '../../core/services/stitcher-service';
 import { ConnectionPayload } from '../../core/models/reports';
+import { paintRaster } from '../shared/paint-raster';
 
 @Component({
     selector: 'app-match-dialog',
@@ -46,8 +47,8 @@ export class MatchDialog {
         context.fillStyle = '#17102e';
         context.fillRect(0, 0, element.width, element.height);
         const offset = payload.trainWidth + gap;
-        this.paint(context, payload.trainImage, payload.trainWidth, payload.trainHeight, 0);
-        this.paint(context, payload.queryImage, payload.width, payload.height, offset);
+        paintRaster(context, payload.trainImage, payload.trainWidth, payload.trainHeight);
+        paintRaster(context, payload.queryImage, payload.width, payload.height, offset);
         context.lineWidth = 1.2;
         for (const match of payload.matches) {
             const q = payload.queryKeypoints[match.queryIndex];
@@ -100,19 +101,5 @@ export class MatchDialog {
                 context.stroke();
             }
         }
-    }
-
-    private paint(
-        context: CanvasRenderingContext2D,
-        buffer: ArrayBuffer,
-        width: number,
-        height: number,
-        x: number,
-    ): void {
-        context.putImageData(
-            new ImageData(new Uint8ClampedArray(buffer.slice(0)), width, height),
-            x,
-            0,
-        );
     }
 }

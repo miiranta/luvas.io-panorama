@@ -1,9 +1,8 @@
 import { CanvasBox } from '../warping/canvas-box';
 import { MosaicGrid } from './mosaic-grid';
 import { MosaicSurface, MosaicView, TileSnapshot, snapshotGrid } from './mosaic-surface';
-import { WarpTile } from '../warping/warp-tile';
-import { REDUCE_SHADER } from './blur-backend';
-import { canReduce } from './gaussian-pyramid';
+import { WarpTile, premultipliedTile } from '../warping/warp-tile';
+import { REDUCE_SHADER, reduceTextures } from './blur-backend';
 import { GlContext, GlProgram, GlTarget, growTarget } from '../../foundation/gpu/gl-context';
 
 const ACCUMULATE = `#version 300 es
@@ -298,30 +297,19 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
 
     addPyramidBands(tile: WarpTile): void {
         this.uploadTile(tile);
-        const levels: { texture: WebGLTexture; width: number; height: number }[] = [
-            { texture: this.tile as WebGLTexture, width: tile.width, height: tile.height },
-        ];
-        for (let level = 1; level < this.bands; level++) {
-            const previous = levels[level - 1];
-            if (!canReduce(previous)) {
-                levels.push(previous);
-                continue;
-            }
-            const width = Math.max(1, previous.width >> 1);
-            const height = Math.max(1, previous.height >> 1);
-            const target = this.sized(this.scratch, level, width, height);
-            if (!target) return;
-            const program = this.programs.reduce;
-            this.context.draw(program, target, width, height, () => {
-                this.context.bindInput(0, previous.texture, program.uniforms['uSource']);
-                this.context.gl.uniform2i(
-                    program.uniforms['uSourceSize'],
-                    previous.width,
-                    previous.height,
-                );
-            });
-            levels.push({ texture: target.texture, width, height });
-        }
+        const levels = reduceTextures(
+            this.context,
+            this.programs.reduce,
+            {
+                texture: this.tile as WebGLTexture,
+                width: tile.width,
+                height: tile.height,
+                target: null,
+            },
+            this.bands,
+            (level, width, height) => this.sized(this.scratch, level, width, height),
+        );
+        if (!levels) return;
         for (let level = 0; level < this.bands; level++) {
             const current = levels[level];
             const coarse = level + 1 < levels.length ? levels[level + 1] : null;
@@ -348,13 +336,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         const box = this.regionOrFull(region);
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
-        const extra =
-            overlay instanceof GpuMosaic &&
-            overlay.width === this.width &&
-            overlay.height === this.height &&
-            overlay.bands === this.bands
-                ? overlay
-                : null;
+        const extra = overlay instanceof GpuMosaic && this.sameGrid(overlay) ? overlay : null;
         const gl = this.context.gl;
         const final = this.byteTarget(width, height);
         const out = new Uint8ClampedArray(width * height * 4);
@@ -565,15 +547,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
 
     private uploadTile(tile: WarpTile): void {
         const gl = this.context.gl;
-        const n = tile.width * tile.height;
-        const data = new Float32Array(n * 4);
-        for (let i = 0; i < n; i++) {
-            const mask = tile.mask[i];
-            data[i * 4] = tile.color[i * 3] * mask;
-            data[i * 4 + 1] = tile.color[i * 3 + 1] * mask;
-            data[i * 4 + 2] = tile.color[i * 3 + 2] * mask;
-            data[i * 4 + 3] = mask;
-        }
+        const data = premultipliedTile(tile);
         if (!this.tile || this.tileWidth < tile.width || this.tileHeight < tile.height) {
             if (this.tile) gl.deleteTexture(this.tile);
             this.tileWidth = Math.max(this.tileWidth, tile.width);

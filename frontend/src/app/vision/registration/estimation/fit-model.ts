@@ -23,7 +23,7 @@ export function fitModel(
     }
 }
 
-export function isPlausibleHomography(m: Mat3, kind: ModelKind, maxSkew: number): boolean {
+export function isPlausibleModel(m: Mat3, kind: ModelKind, maxSkew: number): boolean {
     for (let i = 0; i < 9; i++) if (!isFinite(m[i])) return false;
     const det = m[0] * m[4] - m[1] * m[3];
     if (det <= 1e-6) return false;

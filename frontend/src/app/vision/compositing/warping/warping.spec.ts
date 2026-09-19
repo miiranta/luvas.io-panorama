@@ -25,20 +25,26 @@ describe('warping geometry', () => {
 
     it('bounds a centered photo symmetrically', () => {
         const geometry = createCanvasGeometry('planar', 1024, 400);
-        const footprint = computeFootprint(geometry, mat3Identity(), 640, 480, 400);
+        const footprint = computeFootprint(geometry, {
+            rotation: mat3Identity(),
+            width: 640,
+            height: 480,
+            focal: 400,
+            distortion: 0,
+        });
         expect(footprint.valid).toBe(true);
         expect(footprint.u0 + footprint.u1).toBeCloseTo(geometry.width, -1);
     });
 
     it('extends a spherical footprint to the pole it contains', () => {
         const geometry = createCanvasGeometry('spherical', 1024, 500);
-        const footprint = computeFootprint(
-            geometry,
-            rotationFromAxisAngle(1.4, 0, 0),
-            640,
-            480,
-            500,
-        );
+        const footprint = computeFootprint(geometry, {
+            rotation: rotationFromAxisAngle(1.4, 0, 0),
+            width: 640,
+            height: 480,
+            focal: 500,
+            distortion: 0,
+        });
         expect(footprint.u0).toBe(0);
         expect(footprint.u1).toBe(geometry.width - 1);
         expect(footprint.v1).toBe(geometry.height - 1);

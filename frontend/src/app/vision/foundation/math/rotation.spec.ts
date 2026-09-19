@@ -4,7 +4,7 @@ import {
     opticalAxis,
     rotationAngleBetween,
     rotationFromAxisAngle,
-    yawPitchDegrees,
+    yawDegrees,
 } from './rotation';
 
 const degrees = (value: number) => (value * Math.PI) / 180;
@@ -37,10 +37,8 @@ describe('rotation', () => {
         expect([x, y, z].map((value) => Math.round(value * 1e9) / 1e9)).toEqual([-1, 0, 0]);
     });
 
-    it('reports yaw and pitch of the optical axis in degrees', () => {
-        const pitched = rotationFromAxisAngle(degrees(-20), 0, 0);
-        const { yaw, pitch } = yawPitchDegrees(pitched);
-        expect(yaw).toBeCloseTo(0, 9);
-        expect(Math.abs(pitch)).toBeCloseTo(20, 9);
+    it('reports the yaw of the optical axis in degrees', () => {
+        expect(yawDegrees(rotationFromAxisAngle(0, degrees(30), 0))).toBeCloseTo(-30, 9);
+        expect(yawDegrees(rotationFromAxisAngle(degrees(-20), 0, 0))).toBeCloseTo(0, 9);
     });
 });

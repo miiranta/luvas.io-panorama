@@ -11,7 +11,7 @@ import {
 } from '../../core/models/reports';
 import { ColorImage } from '../foundation/imaging/image';
 import { Mat3, mat3Identity } from '../foundation/math/matrix3';
-import { rotationAngleBetween, yawPitchDegrees } from '../foundation/math/rotation';
+import { rotationDegreesBetween, yawDegrees } from '../foundation/math/rotation';
 import { AcceleratorSuite } from '../foundation/gpu/accelerator-suite';
 import { CameraSolver } from './camera-solver';
 import { FeatureExtractor } from './feature-extractor';
@@ -112,13 +112,14 @@ export class StitchPipeline {
     }
 
     async settle(): Promise<boolean> {
+        const global = this.frameCount > 2;
         if (this.globalBundlePending) {
-            this.adjustAll();
+            if (global) this.adjustAll();
             this.globalBundlePending = false;
         }
         if (this.distortionDrifted()) {
             this.relink();
-            this.adjustAll();
+            if (global) this.adjustAll();
         }
         if (!this.compositor.needsSettle()) return false;
         await this.compositor.recompose();
@@ -182,11 +183,10 @@ export class StitchPipeline {
         const parent = best.candidate.frame;
         this.cameras.blendFocals(links, frame);
         frame.rotation = this.cameras.placeRelativeTo(frame, parent, best.link);
-        this.links.add(...links);
         timings.model = performance.now() - modelling;
         const connection = this.connection(frame, best.candidate);
 
-        const angle = (rotationAngleBetween(frame.rotation, parent.rotation) * 180) / Math.PI;
+        const angle = rotationDegreesBetween(frame.rotation, parent.rotation);
         const minAngle = this.params.global.keyframeMinAngle;
         if (minAngle > 0 && angle < minAngle && this.frameCount > 1) {
             this.reject(
@@ -194,12 +194,10 @@ export class StitchPipeline {
                 report,
                 `only ${angle.toFixed(1)}° of new coverage (below the keyframe threshold)`,
             );
-            this.links.replace(
-                this.links.all.filter((link) => link.a !== frame.id && link.b !== frame.id),
-            );
             return finish(connection);
         }
 
+        this.links.add(...links);
         this.globalBundlePending = true;
         const adjusting = performance.now();
         const bundle = this.cameras.adjust(
@@ -215,7 +213,7 @@ export class StitchPipeline {
 
         Object.assign(report, {
             focal: this.cameras.focal ?? 0,
-            ...yawPitchDegrees(frame.rotation),
+            yaw: yawDegrees(frame.rotation),
             bundleBefore: bundle.before,
             bundleAfter: bundle.after,
         });
@@ -234,10 +232,8 @@ export class StitchPipeline {
         const links: PairLink[] = [];
         for (let i = 0; i < all.length; i++) {
             for (let j = i + 1; j < all.length; j++) {
-                const pair = this.linker.match(all[i], all[j]);
-                if (!isFitted(pair)) continue;
-                const link = this.linker.link(all[i], all[j], pair);
-                if (link.inliers > 0) links.push(this.inheritIntensities(link));
+                const link = this.relinkPair(all[i], all[j]);
+                if (link) links.push(link);
             }
         }
         this.links.replace(links);
@@ -262,12 +258,7 @@ export class StitchPipeline {
             frame.rotation = this.cameras.placeRelativeTo(frame, parent, link);
             placed.add(index);
         }
-        const active = this.frames.active;
-        this.cameras.adjust(
-            active,
-            this.links,
-            active.map((frame) => frame.id),
-        );
+        this.adjustAll();
         await this.compositor.recompose();
     }
 
@@ -346,7 +337,6 @@ export class StitchPipeline {
 
     private adjustAll(): void {
         const active = this.frames.active;
-        if (active.length <= 2) return;
         this.cameras.adjust(
             active,
             this.links,
@@ -366,12 +356,17 @@ export class StitchPipeline {
             const a = active.get(previous.a);
             const b = active.get(previous.b);
             if (!a || !b) continue;
-            const pair = this.linker.match(a, b);
-            if (!isFitted(pair)) continue;
-            const link = this.linker.link(a, b, pair);
-            if (link.inliers > 0) links.push(this.inheritIntensities(link));
+            const link = this.relinkPair(a, b);
+            if (link) links.push(link);
         }
         this.links.replace(links);
+    }
+
+    private relinkPair(a: Keyframe, b: Keyframe): PairLink | null {
+        const pair = this.linker.match(a, b);
+        if (!isFitted(pair)) return null;
+        const link = this.linker.link(a, b, pair);
+        return link.inliers > 0 ? this.inheritIntensities(link) : null;
     }
 
     private inheritIntensities(link: PairLink): PairLink {
@@ -423,7 +418,6 @@ export class StitchPipeline {
             keypoints: frame.keypoints.length,
             focal: this.cameras.focal ?? 0,
             yaw: 0,
-            pitch: 0,
             pairs: [],
             bundleBefore: 0,
             bundleAfter: 0,

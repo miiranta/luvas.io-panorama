@@ -48,6 +48,10 @@ export class CameraSolver {
         );
     }
 
+    focalAt(frame: Keyframe, width: number): number {
+        return this.focalFor(frame) * (width / frame.workWidth);
+    }
+
     initialize(frame: Keyframe): void {
         this.focalEstimate ??= this.focalFor(frame);
     }
@@ -108,7 +112,7 @@ export class CameraSolver {
         if (observations.length === 0 || freeCameras.length === 0) return NO_BUNDLE;
         const reference = active[0];
         const result = this.adjuster.solve({
-            rotations: active.map((frame) => Float64Array.from(frame.rotation) as Mat3),
+            rotations: active.map((frame) => frame.rotation),
             focal: this.focalFor(reference),
             distortion: this.distortion,
             cx: reference.centerX,

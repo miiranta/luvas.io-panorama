@@ -1,4 +1,4 @@
-import { undistort } from '../../registration/alignment/lens-distortion';
+import { distortFactor, undistort } from '../../registration/alignment/lens-distortion';
 import { imageCenter } from '../../foundation/imaging/image';
 import { Mat3, mat3Transpose } from '../../foundation/math/matrix3';
 import { CanvasBox } from './canvas-box';
@@ -12,14 +12,8 @@ export interface Footprint {
     valid: boolean;
 }
 
-export function computeFootprint(
-    geometry: CanvasGeometry,
-    rotation: Mat3,
-    sourceWidth: number,
-    sourceHeight: number,
-    focal: number,
-    distortion = 0,
-): Footprint {
+export function computeFootprint(geometry: CanvasGeometry, request: FootprintRequest): Footprint {
+    const { rotation, width: sourceWidth, height: sourceHeight, focal, distortion } = request;
     const rt = mat3Transpose(rotation);
     const cx = imageCenter(sourceWidth);
     const cy = imageCenter(sourceHeight);
@@ -126,7 +120,7 @@ function seesPole(
     if (z <= 1e-6) return false;
     const nx = (rotation[0] * wx + rotation[1] * wy + rotation[2] * wz) / z;
     const ny = (rotation[3] * wx + rotation[4] * wy + rotation[5] * wz) / z;
-    const lens = 1 + distortion * (nx * nx + ny * ny);
+    const lens = distortFactor(nx, ny, distortion);
     const px = focal * nx * lens + imageCenter(sourceWidth);
     const py = focal * ny * lens + imageCenter(sourceHeight);
     return px >= 0 && py >= 0 && px <= sourceWidth - 1 && py <= sourceHeight - 1;
@@ -145,16 +139,7 @@ export function unionFootprints(
     frames: readonly FootprintRequest[],
 ): CanvasBox | null {
     const boxes = frames
-        .map((frame) =>
-            computeFootprint(
-                geometry,
-                frame.rotation,
-                frame.width,
-                frame.height,
-                frame.focal,
-                frame.distortion,
-            ),
-        )
+        .map((frame) => computeFootprint(geometry, frame))
         .filter((footprint) => footprint.valid);
     if (boxes.length === 0) return null;
     const wraps = geometry.surface !== 'planar';

@@ -5,16 +5,21 @@ import {
 } from '../../foundation/imaging/bilinear';
 import { PipelineParams, SurfaceKind } from '../../../core/models/params';
 import { BlurBackend } from '../blending/blur-backend';
-import { WarpBackend } from '../warping/warp-backend';
 import { CanvasBox, alignDown, alignUp } from '../warping/canvas-box';
 import { CanvasGeometry, createCanvasGeometry } from '../warping/canvas-geometry';
 import { CanvasTransfer, canvasTransfer } from '../warping/canvas-transfer';
-import { clipFootprint, computeFootprint, unionFootprints } from '../warping/footprint';
+import {
+    FootprintRequest,
+    clipFootprint,
+    computeFootprint,
+    unionFootprints,
+} from '../warping/footprint';
 import { MosaicFactory } from '../blending/mosaic-surface';
 import { SeamFinder } from '../seams/seam-finder';
-import { Warper } from '../warping/warper';
+import { blendTile } from '../blending/blend-tile';
 import { WarpTile } from '../warping/warp-tile';
 import { ColorImage } from '../../foundation/imaging/image';
+import { LruCache } from '../../foundation/cache/lru-cache';
 import { PngWriter } from './png-writer';
 import { Mat3 } from '../../foundation/math/matrix3';
 import { Keyframe } from '../../pipeline/keyframe';
@@ -36,18 +41,17 @@ export interface ExportedImage {
 export interface ExportContext {
     params: () => PipelineParams;
     blur: () => BlurBackend;
-    warp: () => WarpBackend;
     createMosaic: MosaicFactory;
-    focalFor: (frame: Keyframe) => number;
+    focalAt: (frame: Keyframe, width: number) => number;
     distortion: () => number;
-    vignetting: () => number;
+    warpFrame: (
+        geometry: CanvasGeometry,
+        frame: Keyframe,
+        source: ColorImage,
+        clip: CanvasBox | null,
+    ) => WarpTile | null;
     orientation: () => Mat3;
     report: (stage: string, progress: number) => void;
-}
-
-interface SourceSize {
-    width: number;
-    height: number;
 }
 
 interface SeamMask {
@@ -59,24 +63,17 @@ interface SeamMask {
 }
 
 class SourceCache {
-    private readonly images = new Map<number, ColorImage>();
+    private readonly images: LruCache<number, ColorImage>;
 
-    constructor(private readonly capacity: number) {}
+    constructor(capacity: number) {
+        this.images = new LruCache(capacity);
+    }
 
     async get(frame: Keyframe): Promise<ColorImage | null> {
         const cached = this.images.get(frame.id);
-        if (cached) {
-            this.images.delete(frame.id);
-            this.images.set(frame.id, cached);
-            return cached;
-        }
+        if (cached) return cached;
         const image = await frame.composeImage();
-        if (!image) return null;
-        this.images.set(frame.id, image);
-        if (this.images.size > this.capacity) {
-            const oldest = this.images.keys().next().value as number;
-            this.images.delete(oldest);
-        }
+        if (image) this.images.set(frame.id, image);
         return image;
     }
 }
@@ -104,20 +101,12 @@ export class PanoramaExporter {
         context.report('preparing export', 0);
         const sources = new SourceCache(SOURCE_CACHE);
         const usable = frames.filter((frame) => frame.hasComposeSource && frame.composeWidth > 0);
-        const sizes = new Map<number, SourceSize>(
-            usable.map((frame) => [
-                frame.id,
-                { width: frame.composeWidth, height: frame.composeHeight },
-            ]),
-        );
         if (usable.length === 0) return null;
         const reference = usable[0];
-        const referenceSize = sizes.get(reference.id) as SourceSize;
-        const nativeFocal =
-            context.focalFor(reference) * (referenceSize.width / reference.workWidth);
+        const nativeFocal = context.focalAt(reference, reference.composeWidth);
         const orientation = context.orientation();
         let geometry = exportGeometry(compose.surface, nativeFocal * scale, orientation);
-        let box = this.box(geometry, usable, sizes);
+        let box = this.box(geometry, usable);
         if (!box) return null;
         const megapixels = this.megapixels(box);
         if (megapixels > megapixelCap) {
@@ -126,12 +115,12 @@ export class PanoramaExporter {
                 nativeFocal * scale * Math.sqrt(megapixelCap / megapixels),
                 orientation,
             );
-            box = this.box(geometry, usable, sizes);
+            box = this.box(geometry, usable);
             if (!box) return null;
         }
         const lowScale = Math.min(1, Math.sqrt(SEAM_MEGAPIXELS / this.megapixels(box)));
         const low = exportGeometry(compose.surface, geometry.focal * lowScale, orientation);
-        const masks = await this.seams(low, usable, sizes, sources);
+        const masks = await this.seams(low, usable, sources);
         const transfer = canvasTransfer(geometry, low);
 
         const width = box.u1 - box.u0 + 1;
@@ -141,20 +130,7 @@ export class PanoramaExporter {
         const rows = Math.ceil(height / tileSize);
         const useBands = compose.blend === 'multiband';
         const footprints = new Map(
-            usable.map((frame) => {
-                const size = sizes.get(frame.id) as SourceSize;
-                return [
-                    frame.id,
-                    computeFootprint(
-                        geometry,
-                        frame.rotation,
-                        size.width,
-                        size.height,
-                        context.focalFor(frame) * (size.width / frame.workWidth),
-                        context.distortion(),
-                    ),
-                ];
-            }),
+            usable.map((frame) => [frame.id, computeFootprint(geometry, this.request(frame))]),
         );
         let done = 0;
         for (let row = 0; row < rows; row++) {
@@ -196,24 +172,10 @@ export class PanoramaExporter {
                     if (!clipFootprint(geometry, reach, region)) continue;
                     const source = await sources.get(frame);
                     if (!source) continue;
-                    const tile = new Warper(geometry, compose, context.warp()).warp(
-                        frame.rotation,
-                        source,
-                        context.focalFor(frame) * (source.width / frame.workWidth),
-                        frame.gain,
-                        context.distortion(),
-                        context.vignetting(),
-                        region,
-                    );
+                    const tile = context.warpFrame(geometry, frame, source, region);
                     if (!tile) continue;
                     this.applySeam(tile, mask, transfer, low);
-                    if (compose.blend === 'average') {
-                        for (let i = 0; i < tile.mask.length; i++) {
-                            tile.mask[i] = tile.mask[i] > 0 ? 1 : 0;
-                        }
-                    }
-                    if (useBands) mosaic.addPyramidBands(tile, context.blur());
-                    else mosaic.addFlat(tile);
+                    blendTile(mosaic, tile, compose.blend, context.blur());
                 }
                 const image = mosaic.render(useBands, null, {
                     u0: coreU0 - region.u0,
@@ -243,22 +205,21 @@ export class PanoramaExporter {
         return ((box.u1 - box.u0 + 1) * (box.v1 - box.v0 + 1)) / 1e6;
     }
 
-    private box(
-        geometry: CanvasGeometry,
-        frames: readonly Keyframe[],
-        sizes: ReadonlyMap<number, SourceSize>,
-    ): CanvasBox | null {
-        const requests = frames.map((frame) => {
-            const size = sizes.get(frame.id) as SourceSize;
-            return {
-                rotation: frame.rotation,
-                width: size.width,
-                height: size.height,
-                focal: this.context.focalFor(frame) * (size.width / frame.workWidth),
-                distortion: this.context.distortion(),
-            };
-        });
-        const union = unionFootprints(geometry, requests);
+    private request(frame: Keyframe): FootprintRequest {
+        return {
+            rotation: frame.rotation,
+            width: frame.composeWidth,
+            height: frame.composeHeight,
+            focal: this.context.focalAt(frame, frame.composeWidth),
+            distortion: this.context.distortion(),
+        };
+    }
+
+    private box(geometry: CanvasGeometry, frames: readonly Keyframe[]): CanvasBox | null {
+        const union = unionFootprints(
+            geometry,
+            frames.map((frame) => this.request(frame)),
+        );
         if (!union) return null;
         if (union.u1 - union.u0 + 1 >= geometry.width) {
             return {
@@ -282,11 +243,10 @@ export class PanoramaExporter {
     private async seams(
         low: CanvasGeometry,
         frames: readonly Keyframe[],
-        sizes: ReadonlyMap<number, SourceSize>,
         sources: SourceCache,
     ): Promise<Map<number, SeamMask>> {
         const masks = new Map<number, SeamMask>();
-        const box = this.box(low, frames, sizes);
+        const box = this.box(low, frames);
         if (!box) return masks;
         const compose = this.context.params().compose;
         const mosaic = this.context.createMosaic(
@@ -306,14 +266,7 @@ export class PanoramaExporter {
             done++;
             const source = await sources.get(frame);
             if (!source) continue;
-            const tile = new Warper(low, compose, this.context.warp()).warp(
-                frame.rotation,
-                source,
-                this.context.focalFor(frame) * (source.width / frame.workWidth),
-                frame.gain,
-                this.context.distortion(),
-                this.context.vignetting(),
-            );
+            const tile = this.context.warpFrame(low, frame, source, null);
             if (!tile) continue;
             finder.cut(mosaic, tile, null);
             mosaic.addFlat(tile);

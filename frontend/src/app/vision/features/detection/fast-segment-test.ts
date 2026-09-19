@@ -20,6 +20,8 @@ export const FAST_OFFSETS: readonly [number, number][] = [
     [-1, -3],
 ];
 
+const COMPASS_STEPS = [0, 4, 8, 12];
+
 export function fastSegmentTest(
     image: GrayImage,
     params: DetectParams,
@@ -40,7 +42,7 @@ export function fastSegmentTest(
             const lo = center - threshold;
             let brighter = 0;
             let darker = 0;
-            for (const step of [0, 4, 8, 12]) {
+            for (const step of COMPASS_STEPS) {
                 const v = data[i + ring[step]];
                 if (v > hi) brighter++;
                 else if (v < lo) darker++;

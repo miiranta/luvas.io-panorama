@@ -13,6 +13,24 @@ export interface RasterPayload {
     pixels: ArrayBuffer;
 }
 
+interface RgbaImage {
+    width: number;
+    height: number;
+    data: Uint8ClampedArray<ArrayBuffer>;
+}
+
+export function toRasterPayload(image: RgbaImage): RasterPayload {
+    return { width: image.width, height: image.height, pixels: image.data.buffer };
+}
+
+export function fromRasterPayload(payload: RasterPayload): RgbaImage {
+    return {
+        width: payload.width,
+        height: payload.height,
+        data: new Uint8ClampedArray(payload.pixels),
+    };
+}
+
 export interface PipelineState {
     busy: boolean;
     stage: string;

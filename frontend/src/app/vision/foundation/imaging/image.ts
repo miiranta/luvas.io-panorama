@@ -14,11 +14,15 @@ export interface ColorImage {
     data: Uint8ClampedArray<ArrayBuffer>;
 }
 
+export function luma(red: number, green: number, blue: number): number {
+    return 0.299 * red + 0.587 * green + 0.114 * blue;
+}
+
 export function toGray(image: ColorImage): GrayImage {
     const { width, height, data } = image;
     const out = new Float32Array(width * height);
     for (let i = 0, p = 0; i < out.length; i++, p += 4) {
-        out[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+        out[i] = luma(data[p], data[p + 1], data[p + 2]);
     }
     return { width, height, data: out };
 }

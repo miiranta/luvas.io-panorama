@@ -160,6 +160,12 @@ export abstract class MosaicGrid {
         };
     }
 
+    protected sameGrid(other: MosaicGrid): boolean {
+        return (
+            other.width === this.width && other.height === this.height && other.bands === this.bands
+        );
+    }
+
     protected regionOrFull(region?: CanvasBox | null): CanvasBox {
         return region ?? { u0: 0, v0: 0, u1: this.width - 1, v1: this.height - 1 };
     }
@@ -202,11 +208,7 @@ export abstract class MosaicGrid {
 
     boundingBox(overlay?: MosaicSurface | null): CanvasBox | null {
         const extra =
-            overlay instanceof MosaicGrid &&
-            overlay.width === this.width &&
-            overlay.height === this.height
-                ? overlay.covered
-                : null;
+            overlay instanceof MosaicGrid && this.sameGrid(overlay) ? overlay.covered : null;
         const mine = this.covered;
         if (!mine) return extra ? { ...extra } : null;
         if (!extra) return { ...mine };
@@ -219,8 +221,7 @@ export abstract class MosaicGrid {
     }
 
     coveredCount(box: CanvasBox, overlay?: MosaicSurface | null): number {
-        const extra =
-            overlay instanceof MosaicGrid && overlay.width === this.width ? overlay : null;
+        const extra = overlay instanceof MosaicGrid && this.sameGrid(overlay) ? overlay : null;
         let count = 0;
         for (let v = box.v0; v <= box.v1; v++) {
             for (let u = box.u0; u <= box.u1; u++) {

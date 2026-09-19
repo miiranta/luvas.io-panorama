@@ -14,10 +14,10 @@ void main() {
     vec4 total = vec4(0.0);
     float weightSum = 0.0;
     float denom = 2.0 * uSigma * uSigma;
-    for (int i = -${MAX_RADIUS}; i <= ${MAX_RADIUS}; i++) {
-        if (i < -uRadius) continue;
-        if (i > uRadius) break;
-        float offset = float(i);
+    for (int i = 0; i <= ${2 * MAX_RADIUS}; i++) {
+        int tap = i - uRadius;
+        if (tap > uRadius) break;
+        float offset = float(tap);
         float weight = exp(-(offset * offset) / denom);
         total += texture(uSource, vUv + uStep * offset) * weight;
         weightSum += weight;

@@ -34,10 +34,6 @@ export class KeyframeStore {
         this.frames.push(frame);
     }
 
-    byId(id: number): Keyframe | undefined {
-        return this.frames.find((frame) => frame.id === id);
-    }
-
     latestActive(): Keyframe | undefined {
         return this.active.at(-1);
     }

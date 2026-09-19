@@ -2,8 +2,9 @@ import { GlContext } from './gl-context';
 
 const REQUIRED_SPEEDUP = 0.85;
 const MAX_GPU_FAILURES = 3;
+const TIMING_RUNS = 3;
 
-export function describeBackend(
+function describeBackend(
     kind: string,
     reason: string,
     gpuMs: number | null,
@@ -47,6 +48,7 @@ export abstract class RoutedBackend<T extends Backend> implements Backend {
 export interface Calibration<T extends Backend> {
     readonly cpu: T;
     readonly workloads: readonly number[];
+    readonly timingRuns?: number;
     createGpu(context: GlContext): T | null;
     agrees(gpu: T, cpu: T, workload: number): boolean;
     run(backend: T, workload: number): boolean;
@@ -67,15 +69,12 @@ export class BackendSelector<T extends Backend> {
     constructor(private readonly calibration: Calibration<T>) {}
 
     select(enabled: boolean): T {
-        if (!enabled) return this.calibration.cpu;
-        this.choice ??= this.calibrate();
-        return this.choice.backend;
+        return enabled ? this.decide().backend : this.calibration.cpu;
     }
 
     describe(enabled: boolean): string {
         if (!enabled) return 'cpu (disabled)';
-        this.choice ??= this.calibrate();
-        const { backend, reason, gpuMs, cpuMs } = this.choice;
+        const { backend, reason, gpuMs, cpuMs } = this.decide();
         const failures =
             backend instanceof RoutedBackend && backend.failureCount > 0
                 ? ` · ${backend.failureCount} failures`
@@ -83,26 +82,36 @@ export class BackendSelector<T extends Backend> {
         return `${describeBackend(backend.kind, reason, gpuMs, cpuMs)}${failures}`;
     }
 
+    private decide(): Choice<T> {
+        if (!this.choice) {
+            try {
+                this.choice = this.calibrate();
+            } catch {
+                this.choice = this.fallback('calibration failed');
+            }
+        }
+        return this.choice;
+    }
+
+    private fallback(reason: string): Choice<T> {
+        return { backend: this.calibration.cpu, reason, gpuMs: null, cpuMs: null };
+    }
+
     private calibrate(): Choice<T> {
         const { cpu, workloads } = this.calibration;
-        const fallback = (reason: string): Choice<T> => ({
-            backend: cpu,
-            reason,
-            gpuMs: null,
-            cpuMs: null,
-        });
         const context = GlContext.shared();
-        if (!context) return fallback('no webgl2');
-        if (context.isSoftware) return fallback('software gl');
+        if (!context) return this.fallback('no webgl2');
+        if (context.isSoftware) return this.fallback('software gl');
         const gpu = this.calibration.createGpu(context);
-        if (!gpu) return fallback('incomplete webgl2');
+        if (!gpu) return this.fallback('incomplete webgl2');
         let gpuMs = 0;
         let cpuMs = 0;
         for (const workload of workloads) {
-            if (!this.calibration.agrees(gpu, cpu, workload)) return fallback('gpu/cpu mismatch');
+            if (!this.calibration.agrees(gpu, cpu, workload))
+                return this.fallback('gpu/cpu mismatch');
             const gpuTime = this.time(gpu, workload);
             const cpuTime = this.time(cpu, workload);
-            if (gpuTime === null || cpuTime === null) return fallback('measurement failed');
+            if (gpuTime === null || cpuTime === null) return this.fallback('measurement failed');
             gpuMs = gpuTime;
             cpuMs = cpuTime;
             if (gpuMs < cpuMs * REQUIRED_SPEEDUP) {
@@ -121,8 +130,12 @@ export class BackendSelector<T extends Backend> {
     }
 
     private time(backend: T, workload: number): number | null {
-        const started = performance.now();
-        if (!this.calibration.run(backend, workload)) return null;
-        return performance.now() - started;
+        let fastest = Number.POSITIVE_INFINITY;
+        for (let run = 0; run < (this.calibration.timingRuns ?? TIMING_RUNS); run++) {
+            const started = performance.now();
+            if (!this.calibration.run(backend, workload)) return null;
+            fastest = Math.min(fastest, performance.now() - started);
+        }
+        return fastest;
     }
 }
