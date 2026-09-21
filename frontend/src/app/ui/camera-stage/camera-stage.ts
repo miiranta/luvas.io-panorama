@@ -16,6 +16,13 @@ import { FrameProbe, waitForSteadyFrame } from '../../core/services/steady-frame
 import { StitcherService } from '../../core/services/stitcher-service';
 
 const STEADY_TIMEOUT_MS = 500;
+const EXPOSURE_NOTICE =
+    'Exposure and white balance are locked for this panorama so every photo matches. Reset to unlock.';
+
+interface StageNotice {
+    text: string;
+    warn: boolean;
+}
 
 @Component({
     selector: 'app-camera-stage',
@@ -35,8 +42,7 @@ export class CameraStage implements OnDestroy {
 
     readonly switching = signal(false);
     readonly steadying = signal(false);
-    readonly exposureLocked = this.camera.exposureLocked;
-    readonly notice = this.stitcher.notice;
+    readonly noticesOpen = signal(false);
 
     readonly active = this.camera.active;
     readonly cameraError = this.camera.error;
@@ -58,6 +64,15 @@ export class CameraStage implements OnDestroy {
     );
     readonly canCompare = computed(() => this.stitcher.connection() !== null);
     readonly hasWork = computed(() => this.frames() > 0 || this.dropped() > 0);
+    readonly notices = computed(() => {
+        const notices: StageNotice[] = [];
+        const warning = this.stitcher.notice();
+        if (warning) notices.push({ text: warning, warn: true });
+        if (this.camera.exposureLocked()) notices.push({ text: EXPOSURE_NOTICE, warn: false });
+        return notices;
+    });
+    readonly hasWarning = computed(() => this.notices().some((notice) => notice.warn));
+    readonly showNotices = computed(() => this.noticesOpen() && this.notices().length > 0);
     readonly shutterTitle = computed(() => {
         if (this.steadying()) return 'Hold still…';
         return this.enoughOverlap() ? 'Take photo' : 'Not enough overlap';
@@ -72,6 +87,10 @@ export class CameraStage implements OnDestroy {
                 await this.open();
             }
         });
+    }
+
+    toggleNotices(): void {
+        this.noticesOpen.set(!this.showNotices());
     }
 
     async open(): Promise<void> {

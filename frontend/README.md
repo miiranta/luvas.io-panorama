@@ -36,18 +36,21 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
 - **Disparador** no centro inferior. À direita, **▯▯** abre a comparação entre a última foto e a
   foto com que ela foi casada, e logo abaixo **↻** reinicia o panorama depois de confirmar num
   diálogo; à esquerda, **⇄** troca de câmera (aparece só quando há mais de um dispositivo).
-- **Foto parada** — ao tocar o disparador, o app espera até 0,5 s o celular parar antes de
+- **Foto parada**: ao tocar o disparador, o app espera até 0,5 s o celular parar antes de
   congelar o quadro (o disparador fica laranja): o deslocamento entre quadros é estimado numa
   miniatura 64×48 como `Σ|ΔI| / Σ|∇I|`, e dois quadros seguidos abaixo de ~0,25 px de miniatura
   liberam a captura. Passado o prazo, captura assim mesmo.
-- **Exposição travada** — na primeira foto, exposição e balanço de branco são travados quando o
+- **Exposição travada**: na primeira foto, exposição e balanço de branco são travados quando o
   navegador oferece `exposureMode`/`whiteBalanceMode` (Chrome no Android); assim as fotos seguintes
   não mudam de brilho e cor enquanto você gira. Se o brilho da cena saltar mais de 25 % ao travar,
-  a exposição volta ao automático. O HUD mostra `exposure locked`; reiniciar o panorama destrava.
-- **Aviso de paralaxe** — se o resíduo da foto nova depois do alinhamento só por rotação (p90 dos
-  erros de reprojeção dela) passa de 2 px na largura de 640, um aviso laranja pede para girar o
-  celular em torno da câmera, não do corpo. Em varreduras sintéticas sem paralaxe o p90 fica em
+  a exposição volta ao automático. Reiniciar o panorama destrava.
+- **Aviso de paralaxe**: se o resíduo da foto nova depois do alinhamento só por rotação (p90 dos
+  erros de reprojeção dela) passa de 2 px na largura de 640, o app pede para girar o celular em
+  torno da câmera, não do corpo. Em varreduras sintéticas sem paralaxe o p90 fica em
   0,8–1,6 px; com o celular num braço de 40 cm diante de uma parede a 2,5 m, 1,8–2,5 px ou mais.
+- **Avisos discretos**: paralaxe e exposição travada não cobrem a câmera: aparece só um **i**
+  pequeno ao lado da contagem de fotos (laranja quando há aviso de paralaxe, neutro quando é só a
+  exposição travada) e o texto abre num balão ao tocar; outro toque fecha.
 - **HUD (topo)** — número de fotos integradas/descartadas. O **ângulo de visão já coberto**
   (ex. `114° × 45°`, medido da caixa envolvente do mosaico na superfície escolhida) fica no painel
   de diagnóstico ⓘ.
@@ -257,30 +260,30 @@ os pixels só do mosaico ficam presos à fonte, os só da foto nova ao sumidouro
 vizinhos custa `c(p) + c(q) + 1 + 4·(a(p) + a(q))`. `c` é a diferença de cor dilatada pela largura
 da rampa (a costura passa longe das diferenças, e a transição não as toca) e `a` ∈ [0, 1] mede o
 quanto o pixel está fora do meio da sobreposição (`|d_mosaico − d_nova| / (d_mosaico + d_nova)`
-por BFS) — só desempata quando as fotos diferem por igual, como numa diferença de exposição. O
+por BFS); só desempata quando as fotos diferem por igual, como numa diferença de exposição. O
 fluxo máximo é o de Boykov–Kolmogorov especializado na grade 4-conexa (`seams/grid-cut.ts`,
 conferido por força bruta em grades aleatórias). Como no OpenCV (`seam_megapix`), a busca roda
 numa grade reduzida (`seamMegapixels`, 0,2 MP por padrão; 0 busca na resolução cheia) e o rótulo é
 levado de volta a cada pixel.
 
 A versão anterior usava Dijkstra multi-fonte com custo `1 + Δcor²`: isso é um Voronoi geodésico, a
-fronteira fica onde as duas frentes se encontram — o meio da sobreposição — e não onde as imagens
+fronteira fica onde as duas frentes se encontram (o meio da sobreposição) e não onde as imagens
 se parecem. Uma pessoa presente só na foto nova, no meio da faixa, saía cortada ao meio (39 % dela
 visível no feather, 73 % misturada na multibanda); com o corte mínimo ela sai inteira ou some.
 
 Com **Deghost** ligado, pixels cuja diferença passa do limiar (`deghostThreshold`) ganham +512 de
 custo: a costura dá a volta num objeto móvel mesmo que o desvio seja longo, e dentro da rampa esses
-pixels ficam com uma única fonte em vez de misturados — é a "detecção de pixels inconsistentes" da
+pixels ficam com uma única fonte em vez de misturados. É a "detecção de pixels inconsistentes" da
 Etapa 6.3, e é o que impede o objeto móvel de aparecer duplicado ou pela metade.
 
 A costura só vale se os **dois** lados obedecem a ela. A máscara da foto nova vai a zero do lado
 do mosaico, mas os acumuladores já guardam o mosaico com peso cheio do lado da foto nova; somando
-por cima, aquele lado saía como média 50/50 das duas fotos — qualquer resíduo de alinhamento ou
+por cima, aquele lado saía como média 50/50 das duas fotos, e qualquer resíduo de alinhamento ou
 paralaxe virava um fantasma. Por isso, com a costura ligada, cada bloco é composto **por cima**
 (`over`, `CompositeMode`): em cada banda e no plano, o que já está lá é multiplicado por `1 − m`
 antes de somar `m·cor`, com `m` a máscara da foto nova naquele nível (a pirâmide da máscara dá a
-transição suave da multibanda). A prévia ao vivo segue a mesma regra ao juntar as camadas —
-`prévia + mosaico·(1 − peso da prévia)` — e a exportação compõe as fotos na mesma ordem em que
+transição suave da multibanda). A prévia ao vivo segue a mesma regra ao juntar as camadas
+(`prévia + mosaico·(1 − peso da prévia)`), e a exportação compõe as fotos na mesma ordem em que
 planejou as costuras. Sem costura (`seam` desligado), a soma normalizada continua: feather e
 average voltam a ser médias ponderadas, como nos livros.
 
@@ -405,7 +408,7 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 - `models/worker-protocol.ts` — mensagens trocadas entre serviço e worker.
 - `services/camera-service.ts` — abre, troca e fecha a câmera (getUserMedia, novas tentativas) e
   trava/destrava exposição e balanço de branco.
-- `services/steady-frame.ts` — miniatura do vídeo, brilho e estimativa de movimento entre quadros
+- `services/steady-frame.ts`: miniatura do vídeo, brilho e estimativa de movimento entre quadros
   para capturar com o celular parado.
 - `services/stitcher-service.ts` — fala com o worker: capturas, prévias ao vivo, exportação, estado em signals.
 - `workers/stitch.worker.ts` — fila de mensagens do worker, refino ocioso e exportação.
@@ -457,9 +460,9 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
   bicúbica/trilinear; `choose-surface.ts` — escolhe a superfície no modo `auto`; `warper.ts` —
   recorta a região e chama o backend; `warp-backend.ts` — warp inverso em CPU e GPU; `warp-tile.ts`
   — tipo do bloco.
-- `photometric/exposure-compensator.ts` — ganhos de exposição; `gain-grid.ts` — grade de ganhos por
+- `photometric/exposure-compensator.ts` — ganhos de exposição; `gain-grid.ts`: grade de ganhos por
   bloco (índice, interpolação, suavização); `vignetting.ts` — modelo e estimativa de vinheta.
-- `seams/seam-finder.ts` — custo da costura, corte e rampa a partir dele; `grid-cut.ts` — fluxo
+- `seams/seam-finder.ts` — custo da costura, corte e rampa a partir dele; `grid-cut.ts`: fluxo
   máximo de Boykov–Kolmogorov numa grade 4-conexa.
 - `blending/gaussian-pyramid.ts` — reduzir/expandir; `mosaic-surface.ts` — contrato de um mosaico;
   `mosaic-grid.ts` — janela na tela, emenda de 360°, cobertura e retratos; `cpu-mosaic.ts`,
@@ -574,7 +577,7 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   resultado é ponto estacionário desse objetivo). As médias `Ī_ij` vêm de uma grade 32×24 sobre a
   sobreposição real de cada par (manchas 7×7 levadas de uma foto à outra pela homografia do par),
   sem pixels escuros/estourados e sem as amostras cuja razão de brilho foge mais de 35 % da mediana
-  do par (objeto móvel, paralaxe) — antes eram manchas em volta dos cantos casados, que são
+  do par (objeto móvel, paralaxe). Antes eram manchas em volta dos cantos casados, que são
   justamente os pontos de mais contraste. Por cima do ganho por imagem, **ganhos por bloco**
   (`blockGains`, como o `BlocksGainCompensator` do OpenCV): cada foto vira uma grade 8×6 de ganhos de
   luminância, resolvidos com o mesmo objetivo sobre os pares de blocos que se sobrepõem, suavizados

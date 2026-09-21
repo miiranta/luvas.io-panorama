@@ -29,7 +29,7 @@ const RELINK_DISTORTION = 0.01;
 const INTRUDER_REASON = 'not enough overlap with neighboring cameras (intruder image)';
 const PARALLAX_PIXELS_PER_WIDTH = 2 / 640;
 const PARALLAX_WARNING =
-    'parallax detected — rotate the phone around its camera, not around your body';
+    'parallax detected: rotate the phone around its camera, not around your body';
 
 interface Candidate {
     frame: Keyframe;

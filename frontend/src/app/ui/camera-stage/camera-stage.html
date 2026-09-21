@@ -13,10 +13,20 @@
         @if (dropped() > 0) {
             <i>· {{ dropped() }} dropped</i>
         }
-        @if (exposureLocked()) {
-            <i>· exposure locked</i>
-        }
     </span>
+    @if (notices().length > 0) {
+        <button
+            type="button"
+            class="notice-toggle"
+            [class.warn]="hasWarning()"
+            [attr.aria-expanded]="showNotices()"
+            aria-controls="stage-notices"
+            title="Notices"
+            (click)="toggleNotices()"
+        >
+            i
+        </button>
+    }
     <span class="spacer"></span>
     <button type="button" class="icon" title="Metrics and graph" (click)="openInsights.emit()">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -45,10 +55,16 @@
     </button>
 </div>
 
+@if (showNotices()) {
+    <div id="stage-notices" class="notices" role="status" (click)="toggleNotices()">
+        @for (item of notices(); track item.text) {
+            <p [class.warn]="item.warn">{{ item.text }}</p>
+        }
+    </div>
+}
+
 @if (cameraError() || pipelineError()) {
     <p class="toast">{{ cameraError() || pipelineError() }}</p>
-} @else if (notice()) {
-    <p class="toast notice">{{ notice() }}</p>
 }
 
 <div class="dock">
