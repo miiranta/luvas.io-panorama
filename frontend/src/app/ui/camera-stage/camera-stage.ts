@@ -5,13 +5,17 @@ import {
     OnDestroy,
     afterNextRender,
     computed,
+    effect,
     inject,
     output,
     signal,
     viewChild,
 } from '@angular/core';
 import { CameraService } from '../../core/services/camera-service';
+import { FrameProbe, waitForSteadyFrame } from '../../core/services/steady-frame';
 import { StitcherService } from '../../core/services/stitcher-service';
+
+const STEADY_TIMEOUT_MS = 500;
 
 @Component({
     selector: 'app-camera-stage',
@@ -30,6 +34,9 @@ export class CameraStage implements OnDestroy {
     readonly openMatch = output<void>();
 
     readonly switching = signal(false);
+    readonly steadying = signal(false);
+    readonly exposureLocked = this.camera.exposureLocked;
+    readonly notice = this.stitcher.notice;
 
     readonly active = this.camera.active;
     readonly cameraError = this.camera.error;
@@ -43,14 +50,23 @@ export class CameraStage implements OnDestroy {
         const preview = this.stitcher.preview();
         return preview === null || preview.verified;
     });
-    readonly canShoot = computed(() => this.active() && !this.busy() && this.enoughOverlap());
+    readonly canShoot = computed(
+        () => this.active() && !this.busy() && !this.steadying() && this.enoughOverlap(),
+    );
     readonly canSwitch = computed(
         () => this.active() && !this.switching() && this.camera.devices().length > 1,
     );
     readonly canCompare = computed(() => this.stitcher.connection() !== null);
     readonly hasWork = computed(() => this.frames() > 0 || this.dropped() > 0);
+    readonly shutterTitle = computed(() => {
+        if (this.steadying()) return 'Hold still…';
+        return this.enoughOverlap() ? 'Take photo' : 'Not enough overlap';
+    });
 
     constructor() {
+        effect(() => {
+            if (!this.hasWork()) void this.camera.unlockExposure();
+        });
         afterNextRender(async () => {
             if (!this.camera.active() && (await this.camera.permissionGranted())) {
                 await this.open();
@@ -65,6 +81,16 @@ export class CameraStage implements OnDestroy {
     async shoot(): Promise<void> {
         const element = this.video()?.nativeElement;
         if (!element || !this.canShoot()) return;
+        this.steadying.set(true);
+        try {
+            if (!this.hasWork()) {
+                const probe = new FrameProbe();
+                await this.camera.lockExposure(() => probe.brightness(element));
+            }
+            await waitForSteadyFrame(element, STEADY_TIMEOUT_MS);
+        } finally {
+            this.steadying.set(false);
+        }
         element.pause();
         try {
             await this.stitcher.capture(element);

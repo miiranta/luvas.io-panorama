@@ -27,6 +27,9 @@ import { PairLinker, isFitted } from './pair-linker';
 const PAYLOAD_MARGIN = 4;
 const RELINK_DISTORTION = 0.01;
 const INTRUDER_REASON = 'not enough overlap with neighboring cameras (intruder image)';
+const PARALLAX_PIXELS_PER_WIDTH = 2 / 640;
+const PARALLAX_WARNING =
+    'parallax detected — rotate the phone around its camera, not around your body';
 
 interface Candidate {
     frame: Keyframe;
@@ -200,11 +203,12 @@ export class StitchPipeline {
         this.links.add(...links);
         this.globalBundlePending = true;
         const adjusting = performance.now();
-        const reprojectionError = this.cameras.adjust(
+        const bundle = this.cameras.adjust(
             this.frames.active,
             this.links,
             this.bundleFreeIds(frame),
         );
+        const residualError = bundle.frameErrors.get(frame.id) ?? 0;
         timings.bundle = performance.now() - adjusting;
 
         const composing = performance.now();
@@ -213,7 +217,10 @@ export class StitchPipeline {
 
         Object.assign(report, {
             focal: this.cameras.focal ?? 0,
-            reprojectionError,
+            reprojectionError: bundle.error,
+            residualError,
+            warning:
+                residualError > PARALLAX_PIXELS_PER_WIDTH * frame.workWidth ? PARALLAX_WARNING : '',
         });
         const stats = this.compositor.statsFor(frame.id);
         if (stats) {
@@ -408,6 +415,8 @@ export class StitchPipeline {
             focal: this.cameras.focal ?? 0,
             pairs: [],
             reprojectionError: 0,
+            residualError: 0,
+            warning: '',
             overlapPixels: 0,
             inconsistentPixels: 0,
             coveragePercent: 0,

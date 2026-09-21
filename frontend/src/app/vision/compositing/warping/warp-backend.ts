@@ -1,6 +1,13 @@
 import { CanvasGeometry } from './canvas-geometry';
 import { distortFactor } from '../../registration/alignment/lens-distortion';
 import { vignetteAt } from '../photometric/vignetting';
+import {
+    GAIN_CELLS,
+    GAIN_COLUMNS,
+    GAIN_ROWS,
+    GainGrid,
+    sampleGainGrid,
+} from '../photometric/gain-grid';
 import { ColorImage, Rgb, UNIT_RGB, imageCenter } from '../../foundation/imaging/image';
 import { mipPyramidFor, sampleMipmapped } from './mip-pyramid';
 import { Mat3, mat3Identity, mat3Multiply } from '../../foundation/math/matrix3';
@@ -15,6 +22,7 @@ import { GlContext, GlProgram, GlTarget, growTarget } from '../../foundation/gpu
 const CALIBRATION_SIDES = [128, 256, 512];
 const AGREEMENT_TOLERANCE = 1.5;
 const SURFACE_CODE: Record<string, number> = { planar: 0, cylindrical: 1, spherical: 2 };
+const UNIFORM_GAIN: GainGrid = { columns: 1, rows: 1, values: new Float32Array([1]) };
 
 export interface WarpRequest {
     geometry: CanvasGeometry;
@@ -24,6 +32,7 @@ export interface WarpRequest {
     distortion: number;
     vignetting: number;
     gain: Rgb;
+    gainGrid: GainGrid | null;
     feather: number;
     u0: number;
     v0: number;
@@ -55,6 +64,8 @@ uniform float uFocal;
 uniform float uDistortion;
 uniform float uVignetting;
 uniform vec3 uGain;
+uniform float uGainGrid[${GAIN_CELLS}];
+uniform ivec2 uGainGridSize;
 uniform float uFeather;
 uniform int uSurface;
 uniform int uWraps;
@@ -108,6 +119,18 @@ vec3 sampleBicubic(vec2 p) {
     return sum;
 }
 
+float gridGain(vec2 p) {
+    vec2 size = vec2(uGainGridSize);
+    vec2 g = clamp((p + 0.5) / uSourceSize * size - 0.5, vec2(0.0), size - 1.0);
+    ivec2 g0 = ivec2(floor(g));
+    ivec2 g1 = min(g0 + 1, uGainGridSize - 1);
+    vec2 f = g - vec2(g0);
+    int w = uGainGridSize.x;
+    float top = mix(uGainGrid[g0.y * w + g0.x], uGainGrid[g0.y * w + g1.x], f.x);
+    float bottom = mix(uGainGrid[g1.y * w + g0.x], uGainGrid[g1.y * w + g1.x], f.x);
+    return mix(top, bottom, f.y);
+}
+
 vec3 sampleMipmapped(vec2 p, float lod) {
     vec2 uv = (p + 0.5) / uSourceSize;
     if (lod >= 1.0) return textureLod(uSource, uv, lod).rgb;
@@ -132,7 +155,8 @@ void main() {
     float edge = min(min(p.x, uSourceSize.x - 1.0 - p.x), min(p.y, uSourceSize.y - 1.0 - p.y));
     vec2 offset = (p - center) / uFocal;
     float falloff = max(0.05, 1.0 + uVignetting * dot(offset, offset));
-    fragColor = vec4(clamp(color * uGain / falloff, 0.0, 1.0), min(1.0, (edge + 0.5) / uFeather));
+    vec3 gain = uGain * gridGain(p);
+    fragColor = vec4(clamp(color * gain / falloff, 0.0, 1.0), min(1.0, (edge + 0.5) / uFeather));
 }`;
 
 export const cpuWarpBackend: WarpBackend = {
@@ -140,6 +164,7 @@ export const cpuWarpBackend: WarpBackend = {
     warp(request: WarpRequest): WarpResult {
         const { geometry, rotation, source, focal, distortion, vignetting, gain, feather } =
             request;
+        const grid = request.gainGrid;
         const { u0, v0, width, height } = request;
         const wraps = geometry.surface !== 'planar';
         const canvasWidth = geometry.width;
@@ -225,8 +250,9 @@ export const cpuWarpBackend: WarpBackend = {
                 const ox = (px - cx) / focal;
                 const oy = (py - cy) / focal;
                 const falloff = vignetteAt(ox * ox + oy * oy, vignetting);
+                const local = grid ? sampleGainGrid(grid, px, py, source.width, source.height) : 1;
                 for (let c = 0; c < 3; c++) {
-                    color[index * 3 + c] = clampByte((sample[c] * gain[c]) / falloff);
+                    color[index * 3 + c] = clampByte((sample[c] * gain[c] * local) / falloff);
                 }
                 const edge = Math.min(Math.min(px, edgeX - px), Math.min(py, edgeY - py));
                 mask[index] = Math.min(1, (edge + 0.5) / feather);
@@ -302,6 +328,8 @@ class GpuWarpBackend implements WarpBackend {
             'uDistortion',
             'uVignetting',
             'uGain',
+            'uGainGrid',
+            'uGainGridSize',
             'uFeather',
             'uSurface',
             'uWraps',
@@ -329,6 +357,9 @@ class GpuWarpBackend implements WarpBackend {
             gl.uniform1f(uniforms['uDistortion'], request.distortion);
             gl.uniform1f(uniforms['uVignetting'], request.vignetting);
             gl.uniform3f(uniforms['uGain'], ...request.gain);
+            const grid = request.gainGrid ?? UNIFORM_GAIN;
+            gl.uniform1fv(uniforms['uGainGrid'], grid.values);
+            gl.uniform2i(uniforms['uGainGridSize'], grid.columns, grid.rows);
             gl.uniform1f(uniforms['uFeather'], Math.max(1, request.feather));
             gl.uniform1i(uniforms['uSurface'], SURFACE_CODE[geometry.surface] ?? 0);
             gl.uniform1i(uniforms['uWraps'], geometry.surface === 'planar' ? 0 : 1);
@@ -452,6 +483,11 @@ function calibrationRequest(side: number): WarpRequest {
         distortion: -0.08,
         vignetting: -0.2,
         gain: UNIT_RGB,
+        gainGrid: {
+            columns: GAIN_COLUMNS,
+            rows: GAIN_ROWS,
+            values: Float32Array.from({ length: GAIN_CELLS }, (_, i) => 0.8 + ((i * 7) % 9) * 0.05),
+        },
         feather: 16,
         u0: Math.round((canvas - side) / 2),
         v0: Math.round((canvas - side) / 2),

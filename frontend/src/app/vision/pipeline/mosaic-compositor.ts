@@ -29,6 +29,7 @@ import {
     PanoramaExporter,
 } from '../compositing/export/panorama-exporter';
 import { PhotometricCalibrator } from './photometric-calibrator';
+import { GainGrid, gainGridsDiffer } from '../compositing/photometric/gain-grid';
 
 const STABLE_DEGREES = 0.2;
 const PREVIEW_TWIST_DEGREES = 0.15;
@@ -60,6 +61,7 @@ export class MosaicCompositor {
     private committedDistortion = 0;
     private committedVignetting = 0;
     private readonly committedGains = new Map<number, Rgb>();
+    private readonly committedGrids = new Map<number, GainGrid | null>();
     private readonly committedPlacements = new Map<number, { rotation: Mat3; focal: number }>();
     private readonly stats = new Map<number, SeamStats>();
     private coverage: number | null = null;
@@ -104,6 +106,7 @@ export class MosaicCompositor {
         this.committedGeometry = null;
         this.photometry.reset();
         this.committedGains.clear();
+        this.committedGrids.clear();
         this.committedPlacements.clear();
         this.stats.clear();
         this.coverage = null;
@@ -263,6 +266,10 @@ export class MosaicCompositor {
         for (const frame of this.frames.active) {
             const gain = this.committedGains.get(frame.id);
             if (gain && gainChange(gain, frame.gain) > GAIN_TOLERANCE) return true;
+            const grid = this.committedGrids.get(frame.id);
+            if (grid !== undefined && gainGridsDiffer(grid, frame.gainGrid, GAIN_TOLERANCE)) {
+                return true;
+            }
             const placement = this.committedPlacements.get(frame.id);
             if (!placement) continue;
             const moved = rotationDegreesBetween(frame.rotation, placement.rotation);
@@ -278,10 +285,12 @@ export class MosaicCompositor {
         this.committedDistortion = this.cameras.distortion;
         this.committedVignetting = this.vignetting;
         this.committedGains.clear();
+        this.committedGrids.clear();
         this.committedPlacements.clear();
         for (const frame of this.frames.active) {
             if (!frame.committed) continue;
             this.committedGains.set(frame.id, frame.gain);
+            this.committedGrids.set(frame.id, frame.gainGrid);
             this.committedPlacements.set(frame.id, {
                 rotation: Float64Array.from(frame.rotation) as Mat3,
                 focal: this.cameras.focalFor(frame),
@@ -356,6 +365,7 @@ export class MosaicCompositor {
             source,
             this.cameras.focalAt(frame, source.width),
             frame.gain,
+            frame.gainGrid,
             this.cameras.distortion,
             this.vignetting,
             clip,

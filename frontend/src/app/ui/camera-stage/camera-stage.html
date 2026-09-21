@@ -13,6 +13,9 @@
         @if (dropped() > 0) {
             <i>· {{ dropped() }} dropped</i>
         }
+        @if (exposureLocked()) {
+            <i>· exposure locked</i>
+        }
     </span>
     <span class="spacer"></span>
     <button type="button" class="icon" title="Metrics and graph" (click)="openInsights.emit()">
@@ -44,6 +47,8 @@
 
 @if (cameraError() || pipelineError()) {
     <p class="toast">{{ cameraError() || pipelineError() }}</p>
+} @else if (notice()) {
+    <p class="toast notice">{{ notice() }}</p>
 }
 
 <div class="dock">
@@ -86,10 +91,11 @@
         type="button"
         class="shutter"
         [class.busy]="busy()"
+        [class.steadying]="steadying()"
         [class.blocked]="!enoughOverlap()"
         [disabled]="!canShoot()"
         (click)="shoot()"
-        [title]="enoughOverlap() ? 'Take photo' : 'Not enough overlap'"
+        [title]="shutterTitle()"
     ></button>
 
     <div class="side-actions">

@@ -5,7 +5,7 @@ import { BundleObservation } from '../registration/alignment/bundle-adjuster';
 import { brownLoweVerified } from '../registration/alignment/pose-graph';
 import { ModelFit, RansacEstimator } from '../registration/estimation/ransac-estimator';
 import { focalFromHomography } from '../registration/alignment/rotational-camera';
-import { undistort } from '../registration/alignment/lens-distortion';
+import { distortFactor, undistort } from '../registration/alignment/lens-distortion';
 import { Correspondence } from '../registration/estimation/correspondence';
 import { ColorImage, Rgb } from '../foundation/imaging/image';
 import { Mat3 } from '../foundation/math/matrix3';
@@ -16,7 +16,8 @@ const MAX_OBSERVATIONS_PER_PAIR = 120;
 const INTENSITY_PATCH_RADIUS = 3;
 const MIN_CORRESPONDENCES = 4;
 const OVERLAP_SAMPLES = 24;
-const MAX_INTENSITY_SAMPLES = 400;
+const INTENSITY_COLUMNS = 32;
+const INTENSITY_ROWS = 24;
 
 export interface PairMatch {
     fit: ModelFit | null;
@@ -117,6 +118,56 @@ export class PairLinker {
         return [frame.centerX + focal * this.scratch[0], frame.centerY + focal * this.scratch[1]];
     }
 
+    private distortPoint(
+        x: number,
+        y: number,
+        frame: Keyframe,
+        focal: number,
+        distortion: number,
+    ): [number, number] {
+        const nx = (x - frame.centerX) / focal;
+        const ny = (y - frame.centerY) / focal;
+        const factor = distortFactor(nx, ny, distortion);
+        return [frame.centerX + focal * nx * factor, frame.centerY + focal * ny * factor];
+    }
+
+    private intensitySamples(query: Keyframe, train: Keyframe, matrix: Mat3): IntensitySample[] {
+        const queryWork = query.work;
+        const trainWork = train.work;
+        if (!queryWork || !trainWork) return [];
+        const lens = this.lens();
+        const distortion = lens.distortion;
+        const queryFocal = lens.focal(query);
+        const trainFocal = lens.focal(train);
+        const margin = INTENSITY_PATCH_RADIUS;
+        const samples: IntensitySample[] = [];
+        for (let row = 0; row < INTENSITY_ROWS; row++) {
+            for (let column = 0; column < INTENSITY_COLUMNS; column++) {
+                const ax = ((column + 0.5) / INTENSITY_COLUMNS) * query.workWidth - 0.5;
+                const ay = ((row + 0.5) / INTENSITY_ROWS) * query.workHeight - 0.5;
+                const [sx, sy] =
+                    distortion === 0
+                        ? [ax, ay]
+                        : this.undistortPoint(ax, ay, query, queryFocal, distortion);
+                const w = matrix[6] * sx + matrix[7] * sy + matrix[8];
+                if (Math.abs(w) < 1e-9) continue;
+                const dx = (matrix[0] * sx + matrix[1] * sy + matrix[2]) / w;
+                const dy = (matrix[3] * sx + matrix[4] * sy + matrix[5]) / w;
+                const [bx, by] =
+                    distortion === 0
+                        ? [dx, dy]
+                        : this.distortPoint(dx, dy, train, trainFocal, distortion);
+                if (bx < margin || by < margin) continue;
+                if (bx > train.workWidth - 1 - margin || by > train.workHeight - 1 - margin)
+                    continue;
+                const colorA = patchColor(queryWork, ax, ay);
+                const colorB = patchColor(trainWork, bx, by);
+                if (colorA && colorB) samples.push({ ax, ay, colorA, bx, by, colorB });
+            }
+        }
+        return samples;
+    }
+
     verified(inliers: number, accepted: number, requireRatio = true): boolean {
         const model = this.params().model;
         const ratio = accepted === 0 ? 0 : inliers / accepted;
@@ -141,7 +192,7 @@ export class PairLinker {
             matrix: fit.matrix,
             observations: sampleObservations(query.id, train.id, correspondences, fit),
             overlapPixels: overlapArea(query, train, fit.matrix),
-            intensities: intensitySamples(query, train, pair),
+            intensities: this.intensitySamples(query, train, fit.matrix),
         };
     }
 
@@ -200,18 +251,6 @@ function overlapArea(query: Keyframe, train: Keyframe, matrix: Mat3): number {
         }
     }
     return (inside / (OVERLAP_SAMPLES * OVERLAP_SAMPLES)) * query.workWidth * query.workHeight;
-}
-
-function intensitySamples(query: Keyframe, train: Keyframe, pair: FittedPair): IntensitySample[] {
-    const queryWork = query.work;
-    const trainWork = train.work;
-    if (!queryWork || !trainWork) return [];
-    return sampleInliers(pair.correspondences, pair.fit, MAX_INTENSITY_SAMPLES).flatMap((c) => {
-        const colorA = patchColor(queryWork, c.sx, c.sy);
-        const colorB = patchColor(trainWork, c.dx, c.dy);
-        if (!colorA || !colorB) return [];
-        return [{ ax: c.sx, ay: c.sy, colorA, bx: c.dx, by: c.dy, colorB }];
-    });
 }
 
 function patchColor(image: ColorImage, x: number, y: number): Rgb | null {

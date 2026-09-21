@@ -22,7 +22,7 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm test -- --watch=false           # 102 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
+npm test -- --watch=false           # 114 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
 npm run typecheck                   # tipos da app, do worker, dos testes e das ferramentas
 npm run verify                      # 90 checagens numéricas contra ground truth sintético (yaw e pitch recuperados)
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
@@ -36,6 +36,18 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
 - **Disparador** no centro inferior. À direita, **▯▯** abre a comparação entre a última foto e a
   foto com que ela foi casada, e logo abaixo **↻** reinicia o panorama depois de confirmar num
   diálogo; à esquerda, **⇄** troca de câmera (aparece só quando há mais de um dispositivo).
+- **Foto parada** — ao tocar o disparador, o app espera até 0,5 s o celular parar antes de
+  congelar o quadro (o disparador fica laranja): o deslocamento entre quadros é estimado numa
+  miniatura 64×48 como `Σ|ΔI| / Σ|∇I|`, e dois quadros seguidos abaixo de ~0,25 px de miniatura
+  liberam a captura. Passado o prazo, captura assim mesmo.
+- **Exposição travada** — na primeira foto, exposição e balanço de branco são travados quando o
+  navegador oferece `exposureMode`/`whiteBalanceMode` (Chrome no Android); assim as fotos seguintes
+  não mudam de brilho e cor enquanto você gira. Se o brilho da cena saltar mais de 25 % ao travar,
+  a exposição volta ao automático. O HUD mostra `exposure locked`; reiniciar o panorama destrava.
+- **Aviso de paralaxe** — se o resíduo da foto nova depois do alinhamento só por rotação (p90 dos
+  erros de reprojeção dela) passa de 2 px na largura de 640, um aviso laranja pede para girar o
+  celular em torno da câmera, não do corpo. Em varreduras sintéticas sem paralaxe o p90 fica em
+  0,8–1,6 px; com o celular num braço de 40 cm diante de uma parede a 2,5 m, 1,8–2,5 px ou mais.
 - **HUD (topo)** — número de fotos integradas/descartadas. O **ângulo de visão já coberto**
   (ex. `114° × 45°`, medido da caixa envolvente do mosaico na superfície escolhida) fica no painel
   de diagnóstico ⓘ.
@@ -56,7 +68,7 @@ A câmera ocupa a tela inteira; tudo o mais é sobreposição.
 - **Comparação (popup)** — aberta pelo botão **▯▯**: as duas fotos lado a lado com todos os
   pares — inliers em amarelo, aceitos pelo ratio test em laranja, rejeitados tracejados — e os
   keypoints com a orientação (Etapa 3.3); **✕** ou um toque fora fecha. Nada fica sobre a câmera.
-- **⚙ Parâmetros** — painel lateral com os controles essenciais e `more options` para os 29
+- **⚙ Parâmetros** — painel lateral com os controles essenciais e `more options` para os 34
   avançados; **✕** fecha. Mudanças em composição/global recompõem o mosaico na hora.
 - **ⓘ Diagnóstico** — grafo de vizinhança (arestas do MST em destaque, intrusas tracejadas), ordem
   inferida, ângulo coberto, focal, distorção da lente κ₁, vinheta β, erro de reprojeção, % de
@@ -133,10 +145,13 @@ passo à parte (`vision/compositing/export/panorama-exporter.ts`), no mesmo dese
    volta no cilindro/esfera e `2,4·f` no plano, com `f` a focal na resolução de composição; a união
    dos footprints de todas as fotos é calculada **antes** de alocar qualquer coisa;
 2. **costuras globais em baixa resolução** — todas as fotos são projetadas numa tela de ~2 MP e a
-   costura geodésica roda uma vez, na ordem de composição; a máscara final de cada foto (rampa +
+   costura por corte mínimo roda uma vez, na ordem de composição; a máscara final de cada foto (rampa +
    costura) é guardada. Assim a decisão de "qual foto vale onde" é uma só para a imagem inteira;
 3. **ladrilhos em resolução cheia** — a saída é dividida em ladrilhos de 1024 px com **halo** de
-   128 px (maior que o suporte da pirâmide). Cada ladrilho compõe só as fotos cujo footprint o toca,
+   `max(128, 4·2^bandas)` px (maior que o suporte da pirâmide). A multibanda ganha
+   `round(log2(largura da exportação / largura da prévia))` bandas a mais (até 7): com as mesmas 4
+   bandas da prévia numa tela ~4× maior, a transição entre fotos saía ~4× mais estreita em ângulo e
+   as emendas de brilho ficavam duras no PNG. Cada ladrilho compõe só as fotos cujo footprint o toca,
    com a máscara global ampliada bilinearmente, na GPU quando disponível, e só o miolo é mantido;
 4. **PNG em fluxo** — ao fim de cada faixa de ladrilhos as linhas vão para um codificador PNG
    próprio no worker (`vision/compositing/export/png-writer.ts`: filtro Paeth, `CompressionStream('deflate')`,
@@ -214,7 +229,7 @@ a mesma foto é redesenhada, e a leitura volta em 8 bits (a fonte já é 8 bits)
 `readPixels` em relação a float e dispensa `EXT_color_buffer_float` — mais celulares ficam com o
 warp na GPU.
 
-O mosaico inteiro da prévia fica na GPU: a CPU só calcula a costura (Dijkstra numa grade reduzida,
+O mosaico inteiro da prévia fica na GPU: a CPU só calcula a costura (corte mínimo numa grade reduzida,
 sequencial por natureza) e a cobertura. Na calibração a GPU compõe 5× mais rápido que a CPU
 (52 ms contra 262 ms). Dois achados do perfilador de CPU do worker (CDP `Profiler` anexado ao
 alvo do worker) mudaram o desenho:
@@ -236,13 +251,27 @@ camadas de composição próprias, para o navegador compor na GPU.
 ### Deghosting com memória limitada
 
 Min-cut sobre todas as camadas exigiria guardar todas as camadas. A costura é calculada
-incrementalmente entre o **mosaico existente** e a **foto nova**, só na faixa de sobreposição:
-Dijkstra multi-fonte a partir dos núcleos exclusivos de cada lado, com custo por pixel
-`1 + Δcor²`. Como no OpenCV (`seam_megapix`), a busca roda numa grade reduzida (`seamMegapixels`,
-0,2 MP por padrão; 0 busca na resolução cheia) e o rótulo é levado de volta a cada pixel. O caminho resultante corta onde as imagens mais se parecem (Aula 08 §8.4.2). Onde a
-diferença passa do limiar, o pixel é atribuído a uma única fonte em vez de misturado — é a
-"detecção de pixels inconsistentes" da Etapa 6.3, e é o que impede o objeto móvel de aparecer
-duplicado.
+incrementalmente entre o **mosaico existente** e a **foto nova**, só na faixa de sobreposição, como
+um **corte mínimo de dois rótulos** (Kwatra et al. 2003, o `GraphCutSeamFinder` do OpenCV):
+os pixels só do mosaico ficam presos à fonte, os só da foto nova ao sumidouro, e cada aresta entre
+vizinhos custa `c(p) + c(q) + 1 + 4·(a(p) + a(q))`. `c` é a diferença de cor dilatada pela largura
+da rampa (a costura passa longe das diferenças, e a transição não as toca) e `a` ∈ [0, 1] mede o
+quanto o pixel está fora do meio da sobreposição (`|d_mosaico − d_nova| / (d_mosaico + d_nova)`
+por BFS) — só desempata quando as fotos diferem por igual, como numa diferença de exposição. O
+fluxo máximo é o de Boykov–Kolmogorov especializado na grade 4-conexa (`seams/grid-cut.ts`,
+conferido por força bruta em grades aleatórias). Como no OpenCV (`seam_megapix`), a busca roda
+numa grade reduzida (`seamMegapixels`, 0,2 MP por padrão; 0 busca na resolução cheia) e o rótulo é
+levado de volta a cada pixel.
+
+A versão anterior usava Dijkstra multi-fonte com custo `1 + Δcor²`: isso é um Voronoi geodésico, a
+fronteira fica onde as duas frentes se encontram — o meio da sobreposição — e não onde as imagens
+se parecem. Uma pessoa presente só na foto nova, no meio da faixa, saía cortada ao meio (39 % dela
+visível no feather, 73 % misturada na multibanda); com o corte mínimo ela sai inteira ou some.
+
+Com **Deghost** ligado, pixels cuja diferença passa do limiar (`deghostThreshold`) ganham +512 de
+custo: a costura dá a volta num objeto móvel mesmo que o desvio seja longo, e dentro da rampa esses
+pixels ficam com uma única fonte em vez de misturados — é a "detecção de pixels inconsistentes" da
+Etapa 6.3, e é o que impede o objeto móvel de aparecer duplicado ou pela metade.
 
 A costura só vale se os **dois** lados obedecem a ela. A máscara da foto nova vai a zero do lado
 do mosaico, mas os acumuladores já guardam o mosaico com peso cheio do lado da foto nova; somando
@@ -293,7 +322,7 @@ average voltam a ser médias ponderadas, como nos livros.
 │         │                                                     │              │
 │         └──────────────────► project ──────► compose ◄────────┘              │
 │                              esfera          warp inverso com mipmaps        │
-│                              cilindro        costura geodésica               │
+│                              cilindro        costura por corte mínimo        │
 │                              plano           feather / pirâmide laplaciana   │
 │                              (raio por       ganho + vinheta                 │
 │                               pixel da tela) prévia · exportação nativa      │
@@ -374,7 +403,10 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 - `models/param-spec.ts` — rótulo, dica e faixa de cada parâmetro exposto no painel.
 - `models/reports.ts` — formato dos relatórios e cargas que o worker manda para a UI.
 - `models/worker-protocol.ts` — mensagens trocadas entre serviço e worker.
-- `services/camera-service.ts` — abre, troca e fecha a câmera (getUserMedia, novas tentativas).
+- `services/camera-service.ts` — abre, troca e fecha a câmera (getUserMedia, novas tentativas) e
+  trava/destrava exposição e balanço de branco.
+- `services/steady-frame.ts` — miniatura do vídeo, brilho e estimativa de movimento entre quadros
+  para capturar com o celular parado.
 - `services/stitcher-service.ts` — fala com o worker: capturas, prévias ao vivo, exportação, estado em signals.
 - `workers/stitch.worker.ts` — fila de mensagens do worker, refino ocioso e exportação.
 
@@ -425,9 +457,10 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
   bicúbica/trilinear; `choose-surface.ts` — escolhe a superfície no modo `auto`; `warper.ts` —
   recorta a região e chama o backend; `warp-backend.ts` — warp inverso em CPU e GPU; `warp-tile.ts`
   — tipo do bloco.
-- `photometric/exposure-compensator.ts` — ganhos de exposição; `vignetting.ts` — modelo e estimativa de
-  vinheta.
-- `seams/seam-finder.ts` — costura de menor custo e rampa a partir dela.
+- `photometric/exposure-compensator.ts` — ganhos de exposição; `gain-grid.ts` — grade de ganhos por
+  bloco (índice, interpolação, suavização); `vignetting.ts` — modelo e estimativa de vinheta.
+- `seams/seam-finder.ts` — custo da costura, corte e rampa a partir dele; `grid-cut.ts` — fluxo
+  máximo de Boykov–Kolmogorov numa grade 4-conexa.
 - `blending/gaussian-pyramid.ts` — reduzir/expandir; `mosaic-surface.ts` — contrato de um mosaico;
   `mosaic-grid.ts` — janela na tela, emenda de 360°, cobertura e retratos; `cpu-mosaic.ts`,
   `gpu-mosaic.ts` — acumuladores multibanda e planos; `blend-tile.ts` — compõe um bloco conforme o
@@ -538,9 +571,20 @@ papel (`CornerDetector`, `SeamFinder`); funções em `camelCase` com verbo ou qu
   (`σ_N = 10`, `σ_g = 0,1`) e `N_ij` a área de sobreposição. A soma é sobre pares **ordenados**, então
   ao derivar em `g_i` o termo de dados entra duas vezes e o de prior uma:
   `g_i = Σ N(2·g_j Ī_ji Ī_ij/σ_N² + 1/σ_g²) / Σ N(2·Ī_ij²/σ_N² + 1/σ_g²)` (um teste confere que o
-  resultado é ponto estacionário desse objetivo). Antes disso, a vinheta
-  `V(r) = 1 + β r²` (Aula 01, queda cos⁴) é estimada por Gauss-Newton em log-intensidade a partir de
-  amostras nos inliers de cada par, junto com um log-ganho por câmera, com Huber e modelo de ruído
+  resultado é ponto estacionário desse objetivo). As médias `Ī_ij` vêm de uma grade 32×24 sobre a
+  sobreposição real de cada par (manchas 7×7 levadas de uma foto à outra pela homografia do par),
+  sem pixels escuros/estourados e sem as amostras cuja razão de brilho foge mais de 35 % da mediana
+  do par (objeto móvel, paralaxe) — antes eram manchas em volta dos cantos casados, que são
+  justamente os pontos de mais contraste. Por cima do ganho por imagem, **ganhos por bloco**
+  (`blockGains`, como o `BlocksGainCompensator` do OpenCV): cada foto vira uma grade 8×6 de ganhos de
+  luminância, resolvidos com o mesmo objetivo sobre os pares de blocos que se sobrepõem, suavizados
+  (caixa 3×3, duas vezes), limitados a [0,7; 1,4] e interpolados bilinearmente no warp (CPU e shader).
+  Isso segue o mapeamento de tons local do celular, que muda o brilho de uma região da foto e não da
+  foto inteira: numa varredura sintética com um gradiente de brilho diferente em cada foto, a
+  diferença média de brilho na sobreposição cai de 18,8 % para 8,5 % (p90 de 42 % para 19 %).
+  Antes disso, a vinheta
+  `V(r) = 1 + β r²` (Aula 01, queda cos⁴) é estimada por Gauss-Newton em log-intensidade a partir das
+  mesmas amostras de cada par, junto com um log-ganho por câmera, com Huber e modelo de ruído
   `σ = 0,08`; o warp divide cada pixel por `V(r)` e as médias de sobreposição são corrigidas antes
   dos ganhos.
 - **Endireitamento** — vetor "para cima" como autovetor de menor autovalor da covariância dos eixos
@@ -561,7 +605,7 @@ zoom), renderiza vistas com rotação conhecida e confere o pipeline contra o gr
 - 6 fotos em varredura horizontal, grade de 2 fileiras, lente com barril (κ₁ = −0,10 e −0,20),
   lente com vinheta (β = −0,25), cilíndrica+feather e planar+afim: **todas** integradas, focal
   recuperada com 0,1–2 % de erro, yaw dentro de 1,5°;
-- κ₁ recuperado (−0,102 para −0,10 e −0,197 para −0,20) e β recuperado (−0,24 para −0,25), e
+- κ₁ recuperado (−0,102 para −0,10 e −0,197 para −0,20) e β recuperado (−0,255 para −0,25), e
   nenhuma vinheta inventada nas cenas sem vinheta (|β| < 0,1);
 - refino global preservando o alinhamento;
 - exportação amostrada acima da prévia e dentro do teto de megapixels, e exportação em ladrilhos de
@@ -596,16 +640,17 @@ tela ficam em `/tmp/e2e`.
 | Etapa 3 — FLANN/BF, ratio test, antes e depois | força bruta em Hamming + ratio test; vetores ao vivo sobre a câmera e card com reprovadas tracejadas |
 | Etapa 4 — ordenação automática sem EXIF, matriz/grafo, intrusa rejeitada | `vision/registration/alignment/pose-graph.ts`, overlay ⓘ, botão *reordenar* (`resolveFromScratch`) |
 | Etapa 5 — homografia por RANSAC, taxa de inliers, erro de reprojeção | `vision/registration/estimation/ransac-estimator.ts`; popup de comparação e overlay ⓘ reportam inliers, taxa e erro |
-| Etapa 6 — composição, blending, deghosting | `vision/compositing/seams/`, `vision/compositing/blending/`: feather, multibanda, costura geodésica, pixels inconsistentes |
+| Etapa 6 — composição, blending, deghosting | `vision/compositing/seams/`, `vision/compositing/blending/`: feather, multibanda, costura por corte mínimo, pixels inconsistentes |
 | X1 — ajuste global em vez de encadeamento | bundle adjustment em janela durante a captura e global no tempo ocioso (`vision/registration/alignment/bundle-adjuster.ts`) |
 | X2 — 360° com projeção cilíndrica/esférica | `surface` no painel (padrão `auto`, escolhida pela extensão da varredura); cilindro cobre 360° e a esfera 360°×180° |
-| X3 — compensação de exposição | ganhos por imagem e por canal RGB estimados nas sobreposições, com a vinheta removida antes |
+| X3 — compensação de exposição | ganhos por imagem e por canal RGB e ganhos de luminância por bloco 8×6, estimados nas sobreposições, com a vinheta removida antes; exposição e balanço de branco travados na captura quando o navegador permite |
 | X4 — comparação com referência pronta | **não feito**: não há `cv2.Stitcher` no navegador; a comparação precisa ser externa |
 
 ## Limites conhecidos
 
 - **Paralaxe**: o modelo rotacional pressupõe giro no centro óptico. Cenas próximas com giro fora do
-  ponto nodal deixam desalinhamento que nenhum bundle resolve — a costura esconde, não corrige.
+  ponto nodal deixam desalinhamento que nenhum bundle resolve — a costura esconde, não corrige; o
+  app só avisa (resíduo p90 alto) para o usuário girar em torno da câmera.
 - **Distorção radial com um termo só**: κ₁ cobre o barril/almofada típicos de celular; lentes
   muito grande-angulares (olho de peixe) pediriam κ₂ ou um modelo equidistante.
 - **Primeiras fotos sem κ₁**: κ₁ só é estimado a partir de 3 câmeras; os dois primeiros pares são

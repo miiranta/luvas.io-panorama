@@ -12,6 +12,7 @@ const MAX_ATTEMPTS = 6;
 const ROW_SLOTS = 8;
 const FOCAL_SLOT = 6;
 const DISTORTION_SLOT = 7;
+const CAMERA_ERROR_QUANTILE = 0.9;
 
 export interface BundleObservation {
     cameraA: number;
@@ -42,6 +43,7 @@ export interface BundleResult {
     focal: number;
     distortion: number;
     finalError: number;
+    cameraErrors: number[];
 }
 
 interface Projection {
@@ -165,6 +167,7 @@ export class BundleAdjuster {
             focal: this.focal,
             distortion: this.distortion,
             finalError: this.rootMeanSquare(),
+            cameraErrors: this.cameraErrors(rotations.length),
         });
         if (this.paramCount === 0 || residualCount < this.paramCount || iterations === 0) {
             return finish();
@@ -479,6 +482,22 @@ export class BundleAdjuster {
                 );
             }
         }
+    }
+
+    private cameraErrors(cameras: number): number[] {
+        const norms: number[][] = Array.from({ length: cameras }, () => []);
+        this.observations.forEach((observation, index) => {
+            const slot = index * 4;
+            const intoA = Math.hypot(this.residuals[slot], this.residuals[slot + 1]);
+            const intoB = Math.hypot(this.residuals[slot + 2], this.residuals[slot + 3]);
+            norms[observation.cameraA]?.push(intoA, intoB);
+            norms[observation.cameraB]?.push(intoA, intoB);
+        });
+        return norms.map((values) => {
+            if (values.length === 0) return 0;
+            values.sort((a, b) => a - b);
+            return values[Math.floor((values.length - 1) * CAMERA_ERROR_QUANTILE)];
+        });
     }
 
     private rootMeanSquare(): number {

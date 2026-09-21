@@ -39,6 +39,8 @@ export interface FrameReport {
     focal: number;
     pairs: PairReport[];
     reprojectionError: number;
+    residualError: number;
+    warning: string;
     overlapPixels: number;
     inconsistentPixels: number;
     coveragePercent: number;

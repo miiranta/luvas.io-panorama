@@ -60,6 +60,7 @@ export interface ComposeParams {
     deghost: boolean;
     deghostThreshold: number;
     exposureCompensation: boolean;
+    blockGains: boolean;
     vignetting: boolean;
     composeWidth: number;
     exportScale: number;
@@ -129,6 +130,7 @@ export const DEFAULT_PARAMS: PipelineParams = {
         deghost: true,
         deghostThreshold: 34,
         exposureCompensation: true,
+        blockGains: true,
         vignetting: true,
         composeWidth: 1600,
         exportScale: 1,

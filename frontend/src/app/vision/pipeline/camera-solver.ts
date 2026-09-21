@@ -11,6 +11,13 @@ const DEFAULT_FOCAL_FACTOR = 1.1;
 const FOCAL_MEMORY = 0.7;
 const MIN_DISTORTION_CAMERAS = 3;
 
+export interface BundleSummary {
+    error: number;
+    frameErrors: Map<number, number>;
+}
+
+const NO_SUMMARY: BundleSummary = { error: 0, frameErrors: new Map() };
+
 export class CameraSolver {
     private focalEstimate: number | null = null;
     private distortionEstimate = 0;
@@ -88,9 +95,9 @@ export class CameraSolver {
             : mat3Multiply(relative, parent.rotation);
     }
 
-    adjust(active: Keyframe[], links: LinkRegistry, freeIds: readonly number[]): number {
+    adjust(active: Keyframe[], links: LinkRegistry, freeIds: readonly number[]): BundleSummary {
         const params = this.params();
-        if (active.length < 2 || params.bundleIterations === 0) return 0;
+        if (active.length < 2 || params.bundleIterations === 0) return NO_SUMMARY;
         const indexOf = new Map(active.map((frame, index) => [frame.id, index]));
         const observations: BundleObservation[] = [];
         for (const link of links.verified) {
@@ -102,7 +109,7 @@ export class CameraSolver {
         const freeCameras = freeIds
             .map((id) => indexOf.get(id))
             .filter((index): index is number => index !== undefined && index !== 0);
-        if (observations.length === 0 || freeCameras.length === 0) return 0;
+        if (observations.length === 0 || freeCameras.length === 0) return NO_SUMMARY;
         const reference = active[0];
         const result = this.adjuster.solve({
             rotations: active.map((frame) => frame.rotation),
@@ -122,6 +129,11 @@ export class CameraSolver {
         this.focalEstimate = result.focal;
         if (params.refineFocal) this.focalRefined = true;
         if (params.refineDistortion) this.distortionEstimate = result.distortion;
-        return result.finalError;
+        return {
+            error: result.finalError,
+            frameErrors: new Map(
+                active.map((frame, index) => [frame.id, result.cameraErrors[index]]),
+            ),
+        };
     }
 }

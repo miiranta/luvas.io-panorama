@@ -428,6 +428,15 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
     },
     {
         group: 'compose',
+        key: 'blockGains',
+        label: 'Block gains',
+        hint: 'Also corrects brightness region by region (phone tone mapping) on top of the per-image gain',
+        kind: 'toggle',
+        advanced: true,
+        restage: 'compose',
+    },
+    {
+        group: 'compose',
         key: 'vignetting',
         label: 'Vignetting',
         hint: 'Estimates the radial falloff V(r) = 1 + β r² from the overlaps and removes it',

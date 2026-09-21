@@ -6,6 +6,7 @@ import { CanvasBox, alignDown, alignUp } from './canvas-box';
 import { CanvasGeometry } from './canvas-geometry';
 import { clipFootprint, computeFootprint } from './footprint';
 import { WarpTile } from './warp-tile';
+import { GainGrid } from '../photometric/gain-grid';
 
 export class Warper {
     constructor(
@@ -19,6 +20,7 @@ export class Warper {
         source: ColorImage,
         sourceFocal: number,
         gain: Rgb,
+        gainGrid: GainGrid | null,
         distortion = 0,
         vignetting = 0,
         clip: CanvasBox | null = null,
@@ -58,6 +60,7 @@ export class Warper {
             distortion,
             vignetting,
             gain,
+            gainGrid,
             feather: Math.max(1, params.featherWidth),
             u0,
             v0,

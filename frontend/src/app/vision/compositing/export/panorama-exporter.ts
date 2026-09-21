@@ -29,6 +29,7 @@ const EXPORT_MARGIN = 2;
 const SEAM_MEGAPIXELS = 2;
 const SOURCE_CACHE = 8;
 const HALO = 128;
+const MAX_EXPORT_BANDS = 7;
 const maskTaps = createBilinearTaps();
 
 export const EXPORT_TILE = 1024;
@@ -66,6 +67,8 @@ interface SeamMask {
 
 interface ExportPlan {
     geometry: CanvasGeometry;
+    bands: number;
+    halo: number;
     low: CanvasGeometry;
     transfer: CanvasTransfer;
     frames: readonly Keyframe[];
@@ -97,6 +100,11 @@ class SourceCache {
         if (image) this.images.set(frame.id, image);
         return image;
     }
+}
+
+function exportBands(bands: number, exportWidth: number, previewWidth: number): number {
+    const extra = Math.round(Math.log2(exportWidth / Math.max(1, previewWidth)));
+    return Math.max(bands, Math.min(MAX_EXPORT_BANDS, bands + Math.max(0, extra)));
 }
 
 function exportGeometry(surface: SurfaceKind, focal: number, orientation: Mat3): CanvasGeometry {
@@ -140,8 +148,15 @@ export class PanoramaExporter {
         const lowScale = Math.min(1, Math.sqrt(SEAM_MEGAPIXELS / this.megapixels(box)));
         const low = exportGeometry(context.surface(), geometry.focal * lowScale, orientation);
         const masks = await this.seams(low, usable, sources);
+        const compose = context.params().compose;
+        const bands =
+            compose.blend === 'multiband'
+                ? exportBands(compose.bands, geometry.width, compose.canvasWidth)
+                : compose.bands;
         const plan: ExportPlan = {
             geometry,
+            bands,
+            halo: Math.max(HALO, 4 << bands),
             low,
             transfer: canvasTransfer(geometry, low),
             frames: usable,
@@ -183,19 +198,19 @@ export class PanoramaExporter {
     }
 
     private async renderTile(plan: ExportPlan, core: CanvasBox): Promise<ImageData> {
-        const { geometry, low, transfer, masks, footprints, sources } = plan;
+        const { geometry, bands, halo, low, transfer, masks, footprints, sources } = plan;
         const context = this.context;
         const compose = context.params().compose;
         const region: CanvasBox = {
-            u0: alignDown(core.u0 - HALO),
-            u1: alignUp(core.u1 + HALO + 1) - 1,
-            v0: Math.max(0, alignDown(core.v0 - HALO)),
-            v1: Math.min(geometry.height - 1, alignUp(core.v1 + HALO + 1) - 1),
+            u0: alignDown(core.u0 - halo),
+            u1: alignUp(core.u1 + halo + 1) - 1,
+            v0: Math.max(0, alignDown(core.v0 - halo)),
+            v1: Math.min(geometry.height - 1, alignUp(core.v1 + halo + 1) - 1),
         };
         const mosaic = context.createMosaic(
             Math.min(region.u1 - region.u0 + 1, geometry.width),
             region.v1 - region.v0 + 1,
-            compose.bands,
+            bands,
             {
                 u0: ((region.u0 % geometry.width) + geometry.width) % geometry.width,
                 v0: region.v0,
@@ -206,7 +221,7 @@ export class PanoramaExporter {
             const mask = masks.get(frame.id);
             const footprint = footprints.get(frame.id);
             if (!mask || !footprint?.valid) continue;
-            if (!clipFootprint(geometry, grow(footprint, HALO), region)) continue;
+            if (!clipFootprint(geometry, grow(footprint, halo), region)) continue;
             const source = await sources.get(frame);
             if (!source) continue;
             const tile = context.warpFrame(geometry, frame, source, region);

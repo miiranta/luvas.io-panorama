@@ -66,6 +66,7 @@ export class StitcherService {
     readonly ready = signal(false);
     readonly status = signal('waiting for camera');
     readonly error = signal<string | null>(null);
+    readonly notice = signal<string | null>(null);
     readonly working = signal(false);
     readonly stale = signal(false);
     readonly progress = signal(-1);
@@ -109,6 +110,7 @@ export class StitcherService {
                 break;
             case 'frame':
                 this.reports.update((list) => [...list, message.report]);
+                this.notice.set(message.report.warning || null);
                 if (message.connection) this.connection.set(message.connection);
                 this.status.set(
                     message.report.accepted
@@ -314,6 +316,7 @@ export class StitcherService {
         this.captureIndex = 0;
         this.sessionWorkWidth = null;
         this.error.set(null);
+        this.notice.set(null);
         this.status.set('pipeline reset');
         this.send({ kind: 'reset' });
     }

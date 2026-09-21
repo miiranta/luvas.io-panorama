@@ -1,4 +1,5 @@
 import { Keypoint } from '../features/detection/keypoint';
+import { GainGrid } from '../compositing/photometric/gain-grid';
 import { ColorImage, Rgb, UNIT_RGB, imageCenter } from '../foundation/imaging/image';
 import { Mat3, mat3Identity } from '../foundation/math/matrix3';
 
@@ -7,6 +8,7 @@ const ARCHIVE_QUALITY = 0.94;
 export class Keyframe {
     rotation: Mat3;
     gain: Rgb = UNIT_RGB;
+    gainGrid: GainGrid | null = null;
     rejected = false;
     composedRotation: Mat3 | null = null;
     readonly composeWidth: number;

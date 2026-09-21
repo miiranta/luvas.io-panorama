@@ -117,6 +117,11 @@
     border: 3px solid var(--outline);
     border-radius: var(--radius);
     box-shadow: var(--pop);
+
+    &.notice {
+        color: var(--outline);
+        background: var(--warn);
+    }
 }
 
 .dock {
@@ -158,6 +163,10 @@
 
     &.busy {
         background: var(--accent);
+    }
+
+    &.steadying {
+        background: var(--accent-soft);
     }
 
     &.blocked {

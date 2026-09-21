@@ -102,6 +102,10 @@
                         <dt>reprojection</dt>
                         <dd>{{ report.reprojectionError.toFixed(2) }} px</dd>
                     </div>
+                    <div>
+                        <dt>residual (p90)</dt>
+                        <dd>{{ report.residualError.toFixed(2) }} px</dd>
+                    </div>
                 }
                 @let ghosting = ghosts();
                 @if (ghosting !== null) {

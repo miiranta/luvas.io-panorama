@@ -1,4 +1,5 @@
 import { ExposureCompensator } from './exposure-compensator';
+import { gainCell, gainGridsDiffer, sampleGainGrid, smoothGainGrid } from './gain-grid';
 import { VignettingSample, estimateVignetting, vignetteAt } from './vignetting';
 
 describe('photometric calibration', () => {
@@ -87,5 +88,38 @@ describe('photometric calibration', () => {
 
     it('does not guess vignetting from too few samples', () => {
         expect(estimateVignetting([], 3)).toBe(0);
+    });
+
+    it('interpolates block gains between block centers and clamps at the borders', () => {
+        const grid = { columns: 2, rows: 1, values: new Float32Array([1, 2]) };
+        expect(sampleGainGrid(grid, 24.5, 10, 100, 20)).toBeCloseTo(1, 6);
+        expect(sampleGainGrid(grid, 74.5, 10, 100, 20)).toBeCloseTo(2, 6);
+        expect(sampleGainGrid(grid, 49.5, 10, 100, 20)).toBeCloseTo(1.5, 6);
+        expect(sampleGainGrid(grid, 0, 10, 100, 20)).toBeCloseTo(1, 6);
+        expect(sampleGainGrid(grid, 99, 10, 100, 20)).toBeCloseTo(2, 6);
+    });
+
+    it('assigns image corners to the first and last block', () => {
+        expect(gainCell(0, 0, 640, 480)).toBe(0);
+        expect(gainCell(639, 479, 640, 480)).toBe(47);
+    });
+
+    it('smooths block gains without shifting a constant level', () => {
+        const flat = smoothGainGrid(new Float32Array(48).fill(1.2), 8, 6, 2);
+        for (const value of flat) expect(value).toBeCloseTo(1.2, 6);
+        const spike = new Float32Array(48).fill(1);
+        spike[3 * 8 + 3] = 2;
+        const spread = smoothGainGrid(spike, 8, 6, 1);
+        expect(spread[3 * 8 + 3]).toBeCloseTo(1 + 1 / 9, 6);
+        expect(spread[2 * 8 + 2]).toBeCloseTo(1 + 1 / 9, 6);
+        expect(spread[0]).toBe(1);
+    });
+
+    it('notices when a block gain grid changes', () => {
+        const grid = { columns: 1, rows: 1, values: new Float32Array([1]) };
+        expect(gainGridsDiffer(grid, grid, 0.02)).toBe(false);
+        expect(gainGridsDiffer(grid, null, 0.02)).toBe(true);
+        const nudged = { columns: 1, rows: 1, values: new Float32Array([1.05]) };
+        expect(gainGridsDiffer(grid, nudged, 0.02)).toBe(true);
     });
 });

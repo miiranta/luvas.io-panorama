@@ -1,6 +1,8 @@
 import { Injectable, signal } from '@angular/core';
 
 type Facing = 'user' | 'environment';
+type MeteringKey = 'exposureMode' | 'whiteBalanceMode';
+type MeteringCapabilities = Partial<Record<MeteringKey, string[]>>;
 
 export interface CameraRequest {
     deviceId?: string;
@@ -8,6 +10,9 @@ export interface CameraRequest {
 }
 
 const RELEASE_DELAY = 250;
+const LOCK_MODES = ['manual', 'single-shot'];
+const LOCK_SETTLE_MS = 350;
+const LOCK_BRIGHTNESS_TOLERANCE = Math.log(1.25);
 const BUSY_RETRIES = 3;
 const BUSY_ERRORS = new Set(['NotReadableError', 'AbortError', 'TrackStartError']);
 
@@ -25,6 +30,7 @@ export class CameraService {
     readonly devices = signal<MediaDeviceInfo[]>([]);
     readonly currentDeviceId = signal<string | null>(null);
     readonly facing = signal<Facing | null>(null);
+    readonly exposureLocked = signal(false);
 
     get supported(): boolean {
         return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
@@ -126,6 +132,66 @@ export class CameraService {
         this.stream?.getTracks().forEach((track) => track.stop());
         this.stream = null;
         this.active.set(false);
+        this.exposureLocked.set(false);
+    }
+
+    async lockExposure(brightness: () => number | null): Promise<boolean> {
+        const track = this.stream?.getVideoTracks()[0];
+        if (!track || this.exposureLocked()) return false;
+        const whiteBalance = this.lockMode(track, 'whiteBalanceMode');
+        const balanced =
+            whiteBalance !== null &&
+            (await this.applyMetering(track, { whiteBalanceMode: whiteBalance }));
+        const exposure = this.lockMode(track, 'exposureMode');
+        const before = brightness();
+        const exposed =
+            exposure !== null && (await this.applyMetering(track, { exposureMode: exposure }));
+        if (exposed) {
+            await delay(LOCK_SETTLE_MS);
+            const after = brightness();
+            if (before && after && Math.abs(Math.log(after / before)) > LOCK_BRIGHTNESS_TOLERANCE) {
+                await this.applyMetering(track, { exposureMode: 'continuous' });
+                this.exposureLocked.set(balanced);
+                return false;
+            }
+        }
+        this.exposureLocked.set(balanced || exposed);
+        return this.exposureLocked();
+    }
+
+    async unlockExposure(): Promise<void> {
+        const track = this.stream?.getVideoTracks()[0];
+        if (!track || !this.exposureLocked()) return;
+        this.exposureLocked.set(false);
+        const release: Partial<Record<MeteringKey, string>> = {};
+        for (const key of ['exposureMode', 'whiteBalanceMode'] as const) {
+            if (this.capabilities(track)[key]?.includes('continuous')) release[key] = 'continuous';
+        }
+        await this.applyMetering(track, release);
+    }
+
+    private capabilities(track: MediaStreamTrack): MeteringCapabilities {
+        return typeof track.getCapabilities === 'function'
+            ? (track.getCapabilities() as MeteringCapabilities)
+            : {};
+    }
+
+    private lockMode(track: MediaStreamTrack, key: MeteringKey): string | null {
+        const modes = this.capabilities(track)[key] ?? [];
+        return LOCK_MODES.find((mode) => modes.includes(mode)) ?? null;
+    }
+
+    private async applyMetering(
+        track: MediaStreamTrack,
+        metering: Partial<Record<MeteringKey, string>>,
+    ): Promise<boolean> {
+        if (Object.keys(metering).length === 0) return false;
+        try {
+            await track.applyConstraints({ advanced: [metering as MediaTrackConstraintSet] });
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     private constraintsFor({ deviceId, facing }: CameraRequest): MediaStreamConstraints[] {

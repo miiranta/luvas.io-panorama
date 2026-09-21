@@ -142,6 +142,8 @@ describe('camera alignment', () => {
             iterations: 40,
         });
         expect(result.finalError).toBeLessThan(1e-3);
+        expect(result.cameraErrors).toHaveLength(3);
+        expect(Math.max(...result.cameraErrors)).toBeLessThan(1e-2);
         expect(result.focal).toBeCloseTo(FOCAL, 1);
         expect(result.distortion).toBeCloseTo(kappa, 4);
         for (let i = 1; i < 3; i++)

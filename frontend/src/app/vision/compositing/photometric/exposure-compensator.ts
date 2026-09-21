@@ -23,7 +23,6 @@ function optimalGain(
     let numerator = 0;
     let denominator = 0;
     for (const pair of pairs) {
-        if (pair.a !== camera && pair.b !== camera) continue;
         const first = pair.a === camera;
         const mine = first ? pair.meanA : pair.meanB;
         const other = first ? pair.meanB : pair.meanA;
@@ -39,10 +38,15 @@ export class ExposureCompensator {
     solve(pairs: readonly OverlapIntensity[], cameraCount: number): Float64Array {
         const gains = new Float64Array(cameraCount).fill(1);
         if (pairs.length === 0) return gains;
+        const touching: OverlapIntensity[][] = Array.from({ length: cameraCount }, () => []);
+        for (const pair of pairs) {
+            touching[pair.a]?.push(pair);
+            if (pair.b !== pair.a) touching[pair.b]?.push(pair);
+        }
         for (let iteration = 0; iteration < ITERATIONS; iteration++) {
             let maxDelta = 0;
             for (let i = 0; i < cameraCount; i++) {
-                const next = optimalGain(i, pairs, gains);
+                const next = optimalGain(i, touching[i], gains);
                 if (next === null) continue;
                 maxDelta = Math.max(maxDelta, Math.abs(next - gains[i]));
                 gains[i] = next;
