@@ -64,4 +64,26 @@ describe('blending', () => {
         expect(mosaic.flatWeight[10 * 256 + 10]).toBe(0);
         expect(mosaic.coverage[10 * 256 + 10]).toBe(0);
     });
+
+    it('composites over what is already there, keeping only what the new weight leaves', () => {
+        const mosaic = new CpuMosaic(64, 8, 2);
+        const tile = (value: number, mask: number) => ({
+            u0: 0,
+            v0: 0,
+            width: 64,
+            height: 8,
+            color: new Float32Array(64 * 8 * 3).fill(value),
+            mask: new Float32Array(64 * 8).fill(mask),
+            pixels: 64 * 8,
+        });
+        const color = new Float32Array(3);
+        mosaic.addPyramidBands(tile(100, 1), undefined, 'over');
+        mosaic.addPyramidBands(tile(200, 1), undefined, 'over');
+        expect(mosaic.meanColorAt(4 * 64 + 30, color)).toBe(true);
+        expect(color[0]).toBeCloseTo(200, 4);
+        mosaic.addFlat(tile(40, 0.25), 'over');
+        expect(mosaic.meanColorAt(4 * 64 + 30, color)).toBe(true);
+        expect(color[0]).toBeCloseTo(0.75 * 200 + 0.25 * 40, 3);
+        expect(mosaic.flatWeight[4 * 64 + 30]).toBeCloseTo(1, 6);
+    });
 });

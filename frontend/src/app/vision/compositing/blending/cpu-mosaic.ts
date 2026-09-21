@@ -5,7 +5,7 @@ import {
 } from '../../foundation/imaging/bilinear';
 import { BlurBackend, cpuBlurBackend } from './blur-backend';
 import { CanvasBox } from '../warping/canvas-box';
-import { MosaicSurface, MosaicView, TileSnapshot } from './mosaic-surface';
+import { CompositeMode, MosaicSurface, MosaicView, TileSnapshot } from './mosaic-surface';
 import { MosaicGrid } from './mosaic-grid';
 import { PyramidLevel, expandLevel, gaussianPyramid } from './gaussian-pyramid';
 import { WarpTile, premultipliedTile } from '../warping/warp-tile';
@@ -99,14 +99,18 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         return true;
     }
 
-    addFlat(tile: WarpTile): void {
+    addFlat(tile: WarpTile, mode: CompositeMode = 'add'): void {
+        const over = mode === 'over';
         this.forEachCovered(tile, (t, row, column) => {
             const w = tile.mask[t];
+            const keep = over ? 1 - w : 1;
             const index = row * this.width + column;
-            this.flatColor[index * 3] += tile.color[t * 3] * w;
-            this.flatColor[index * 3 + 1] += tile.color[t * 3 + 1] * w;
-            this.flatColor[index * 3 + 2] += tile.color[t * 3 + 2] * w;
-            this.flatWeight[index] += w;
+            this.flatColor[index * 3] = this.flatColor[index * 3] * keep + tile.color[t * 3] * w;
+            this.flatColor[index * 3 + 1] =
+                this.flatColor[index * 3 + 1] * keep + tile.color[t * 3 + 1] * w;
+            this.flatColor[index * 3 + 2] =
+                this.flatColor[index * 3 + 2] * keep + tile.color[t * 3 + 2] * w;
+            this.flatWeight[index] = this.flatWeight[index] * keep + w;
         });
         this.markCoverage(tile);
     }
@@ -116,6 +120,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         level: number,
         current: PyramidLevel,
         next: PyramidLevel | null,
+        over: boolean,
     ): void {
         const accColor = this.bandColor[level];
         const accWeight = this.bandWeight[level];
@@ -148,15 +153,20 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
                     }
                 }
                 const index = rowStart + column;
-                accColor[index * 3] += r * weight;
-                accColor[index * 3 + 1] += g * weight;
-                accColor[index * 3 + 2] += b * weight;
-                accWeight[index] += weight;
+                const keep = over ? 1 - weight : 1;
+                accColor[index * 3] = accColor[index * 3] * keep + r * weight;
+                accColor[index * 3 + 1] = accColor[index * 3 + 1] * keep + g * weight;
+                accColor[index * 3 + 2] = accColor[index * 3 + 2] * keep + b * weight;
+                accWeight[index] = accWeight[index] * keep + weight;
             }
         }
     }
 
-    addPyramidBands(tile: WarpTile, blur: BlurBackend = cpuBlurBackend): void {
+    addPyramidBands(
+        tile: WarpTile,
+        blur: BlurBackend = cpuBlurBackend,
+        mode: CompositeMode = 'add',
+    ): void {
         const base: PyramidLevel = {
             data: premultipliedTile(tile),
             width: tile.width,
@@ -170,12 +180,12 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
                 coarser && coarser !== current
                     ? expandLevel(coarser, current.width, current.height)
                     : null;
-            this.accumulateLevel(tile, level, current, next);
+            this.accumulateLevel(tile, level, current, next, mode === 'over');
         }
-        this.addFlat(tile);
+        this.addFlat(tile, mode);
     }
 
-    private collapseRegion(overlay: CpuMosaic | null, box: CanvasBox): PyramidLevel {
+    private collapseRegion(overlay: CpuMosaic | null, box: CanvasBox, over: boolean): PyramidLevel {
         let previous: RegionLevel | null = null;
         for (let level = this.bands - 1; level >= 0; level--) {
             const { u0, v0, u1, v1 } = this.levelRegion(level, box);
@@ -183,7 +193,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
             const merged: Float32Array = previous
                 ? upsampleRegion(previous, region)
                 : new Float32Array(region.width * region.height * 3);
-            this.addBand(level, overlay, region, merged);
+            this.addBand(level, overlay, region, merged, over);
             previous = { data: merged, ...region };
         }
         const finest = previous as RegionLevel;
@@ -202,6 +212,7 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         overlay: CpuMosaic | null,
         region: RegionBox,
         merged: Float32Array,
+        over: boolean,
     ): void {
         const stride = this.bandWidth[level];
         const color = this.bandColor[level];
@@ -212,12 +223,15 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const index = (v0 + y) * stride + u0 + x;
-                const total = weight[index] + (extraWeight ? extraWeight[index] : 0);
+                const extra = extraWeight ? extraWeight[index] : 0;
+                const keep = over ? 1 - extra : 1;
+                const total = weight[index] * keep + extra;
                 if (total <= 1e-5) continue;
                 const inverse = 1 / total;
                 const target = (y * width + x) * 3;
                 for (let c = 0; c < 3; c++) {
-                    const sum = color[index * 3 + c] + (extraColor ? extraColor[index * 3 + c] : 0);
+                    const sum =
+                        color[index * 3 + c] * keep + (extraColor ? extraColor[index * 3 + c] : 0);
                     merged[target + c] += sum * inverse;
                 }
             }
@@ -228,13 +242,15 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
         useBands: boolean,
         overlay?: MosaicSurface | null,
         region?: CanvasBox | null,
+        mode: CompositeMode = 'add',
     ): ImageData {
         const box = this.regionOrFull(region);
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const out = new Uint8ClampedArray(width * height * 4);
         const extra = overlay instanceof CpuMosaic && this.sameGrid(overlay) ? overlay : null;
-        const collapsed = useBands ? this.collapseRegion(extra, box).data : null;
+        const over = mode === 'over';
+        const collapsed = useBands ? this.collapseRegion(extra, box, over).data : null;
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const i = (box.v0 + y) * this.width + box.u0 + x;
@@ -247,13 +263,14 @@ export class CpuMosaic extends MosaicGrid implements MosaicSurface {
                     out[o * 4 + 1] = collapsed[o * 3 + 1];
                     out[o * 4 + 2] = collapsed[o * 3 + 2];
                 } else {
-                    const w = this.flatWeight[i] + (extra ? extra.flatWeight[i] : 0);
+                    const extraWeight = extra ? extra.flatWeight[i] : 0;
+                    const keep = over ? 1 - extraWeight : 1;
+                    const w = this.flatWeight[i] * keep + extraWeight;
                     if (w <= 1e-6) continue;
-                    out[o * 4] = (this.flatColor[i * 3] + (extra ? extra.flatColor[i * 3] : 0)) / w;
-                    out[o * 4 + 1] =
-                        (this.flatColor[i * 3 + 1] + (extra ? extra.flatColor[i * 3 + 1] : 0)) / w;
-                    out[o * 4 + 2] =
-                        (this.flatColor[i * 3 + 2] + (extra ? extra.flatColor[i * 3 + 2] : 0)) / w;
+                    for (let c = 0; c < 3; c++) {
+                        const own = this.flatColor[i * 3 + c] * keep;
+                        out[o * 4 + c] = (own + (extra ? extra.flatColor[i * 3 + c] : 0)) / w;
+                    }
                 }
                 out[o * 4 + 3] = 255;
             }

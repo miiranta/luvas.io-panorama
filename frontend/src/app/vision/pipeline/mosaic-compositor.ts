@@ -16,7 +16,7 @@ import { SeamFinder, SeamStats } from '../compositing/seams/seam-finder';
 import { Warper } from '../compositing/warping/warper';
 import { WarpTile } from '../compositing/warping/warp-tile';
 import { CanvasBox } from '../compositing/warping/canvas-box';
-import { blendTile } from '../compositing/blending/blend-tile';
+import { blendTile, compositeMode } from '../compositing/blending/blend-tile';
 import { Mat3 } from '../foundation/math/matrix3';
 import { rotationDegreesBetween } from '../foundation/math/rotation';
 import { CameraSolver } from './camera-solver';
@@ -170,7 +170,8 @@ export class MosaicCompositor {
 
     render(crop: boolean, margin = 0): RasterPayload | null {
         if (!this.committed) return null;
-        const useBands = this.params().compose.blend === 'multiband';
+        const compose = this.params().compose;
+        const useBands = compose.blend === 'multiband';
         const box = crop ? this.committed.boundingBox(this.preview) : null;
         const region = box
             ? {
@@ -180,7 +181,7 @@ export class MosaicCompositor {
                   v1: Math.min(this.committed.height - 1, box.v1 + margin),
               }
             : null;
-        const image = this.committed.render(useBands, this.preview, region);
+        const image = this.committed.render(useBands, this.preview, region, compositeMode(compose));
         return { width: image.width, height: image.height, pixels: image.data.buffer };
     }
 
@@ -372,7 +373,7 @@ export class MosaicCompositor {
         if (!tile) return NO_STATS;
         const params = this.params().compose;
         const stats = new SeamFinder(params).cut(mosaic, tile, reference);
-        blendTile(mosaic, tile, params.blend, this.blur());
+        blendTile(mosaic, tile, params.blend, this.blur(), compositeMode(params));
         return stats;
     }
 }

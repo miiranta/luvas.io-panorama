@@ -17,7 +17,7 @@ import {
 } from '../warping/footprint';
 import { MosaicFactory } from '../blending/mosaic-surface';
 import { SeamFinder } from '../seams/seam-finder';
-import { blendTile } from '../blending/blend-tile';
+import { blendTile, compositeMode } from '../blending/blend-tile';
 import { WarpTile } from '../warping/warp-tile';
 import { ColorImage } from '../../foundation/imaging/image';
 import { LruCache } from '../../foundation/cache/lru-cache';
@@ -212,7 +212,7 @@ export class PanoramaExporter {
             const tile = context.warpFrame(geometry, frame, source, region);
             if (!tile) continue;
             this.applySeam(tile, mask, transfer, low);
-            blendTile(mosaic, tile, compose.blend, context.blur());
+            blendTile(mosaic, tile, compose.blend, context.blur(), compositeMode(compose));
         }
         const image = mosaic.render(compose.blend === 'multiband', null, {
             u0: core.u0 - region.u0,
@@ -292,7 +292,7 @@ export class PanoramaExporter {
             const tile = this.context.warpFrame(low, frame, source, null);
             if (!tile) continue;
             finder.cut(mosaic, tile, null);
-            mosaic.addFlat(tile);
+            mosaic.addFlat(tile, compositeMode(compose));
             masks.set(frame.id, {
                 u0: tile.u0,
                 v0: tile.v0,

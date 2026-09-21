@@ -1,8 +1,14 @@
 import { CanvasBox } from '../warping/canvas-box';
 import { MosaicGrid } from './mosaic-grid';
-import { MosaicSurface, MosaicView, TileSnapshot, snapshotGrid } from './mosaic-surface';
+import {
+    CompositeMode,
+    MosaicSurface,
+    MosaicView,
+    TileSnapshot,
+    snapshotGrid,
+} from './mosaic-surface';
 import { WarpTile, premultipliedTile } from '../warping/warp-tile';
-import { REDUCE_SHADER, reduceTextures } from './blur-backend';
+import { BlurBackend, REDUCE_SHADER, reduceTextures } from './blur-backend';
 import { GlContext, GlProgram, GlTarget, growTarget } from '../../foundation/gpu/gl-context';
 
 const ACCUMULATE = `#version 300 es
@@ -49,6 +55,7 @@ uniform sampler2D uBand;
 uniform sampler2D uOverlay;
 uniform sampler2D uPrevious;
 uniform int uHasOverlay;
+uniform int uOverlayOver;
 uniform int uHasPrevious;
 uniform ivec2 uOrigin;
 uniform ivec2 uPrevOrigin;
@@ -64,7 +71,10 @@ vec4 previousAt(ivec2 p) {
 void main() {
     ivec2 pos = ivec2(gl_FragCoord.xy) + uOrigin;
     vec4 b = texelFetch(uBand, pos, 0);
-    if (uHasOverlay == 1) b += texelFetch(uOverlay, pos, 0);
+    if (uHasOverlay == 1) {
+        vec4 o = texelFetch(uOverlay, pos, 0);
+        b = uOverlayOver == 1 ? o + b * (1.0 - o.a) : b + o;
+    }
     vec3 value = vec3(0.0);
     if (uHasPrevious == 1) {
         vec2 p = clamp(vec2(pos) * 0.5 - vec2(uPrevOrigin), vec2(0.0), vec2(uPrevSize - 1));
@@ -149,6 +159,7 @@ function programsFor(context: GlContext): GpuPrograms | null {
         'uOverlay',
         'uPrevious',
         'uHasOverlay',
+        'uOverlayOver',
         'uHasPrevious',
         'uOrigin',
         'uPrevOrigin',
@@ -290,12 +301,12 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         });
     }
 
-    addFlat(tile: WarpTile): void {
+    addFlat(tile: WarpTile, mode: CompositeMode = 'add'): void {
         this.uploadTile(tile);
-        this.accumulateFlat(tile);
+        this.accumulateFlat(tile, mode);
     }
 
-    addPyramidBands(tile: WarpTile): void {
+    addPyramidBands(tile: WarpTile, _blur?: BlurBackend, mode: CompositeMode = 'add'): void {
         this.uploadTile(tile);
         const levels = reduceTextures(
             this.context,
@@ -323,20 +334,23 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
                 current.width,
                 current.height,
                 1e-5,
+                mode,
             );
         }
-        this.accumulateFlat(tile);
+        this.accumulateFlat(tile, mode);
     }
 
     render(
         useBands: boolean,
         overlay?: MosaicSurface | null,
         region?: CanvasBox | null,
+        mode: CompositeMode = 'add',
     ): ImageData {
         const box = this.regionOrFull(region);
         const width = box.u1 - box.u0 + 1;
         const height = box.v1 - box.v0 + 1;
         const extra = overlay instanceof GpuMosaic && this.sameGrid(overlay) ? overlay : null;
+        const overlayOver = extra && mode === 'over' ? 1 : 0;
         const gl = this.context.gl;
         const final = this.byteTarget(width, height);
         const out = new Uint8ClampedArray(width * height * 4);
@@ -377,6 +391,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
                         program.uniforms['uPrevious'],
                     );
                     gl.uniform1i(program.uniforms['uHasOverlay'], extra ? 1 : 0);
+                    gl.uniform1i(program.uniforms['uOverlayOver'], overlayOver);
                     gl.uniform1i(program.uniforms['uHasPrevious'], prior ? 1 : 0);
                     gl.uniform2i(program.uniforms['uOrigin'], u0, v0);
                     gl.uniform2i(program.uniforms['uPrevOrigin'], prior?.u0 ?? 0, prior?.v0 ?? 0);
@@ -407,6 +422,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
                 );
                 this.context.bindInput(2, this.empty, program.uniforms['uPrevious']);
                 gl.uniform1i(program.uniforms['uHasOverlay'], extra ? 1 : 0);
+                gl.uniform1i(program.uniforms['uOverlayOver'], overlayOver);
                 gl.uniform1i(program.uniforms['uHasPrevious'], 0);
                 gl.uniform2i(program.uniforms['uOrigin'], box.u0, box.v0);
                 gl.uniform2i(program.uniforms['uPrevOrigin'], 0, 0);
@@ -445,7 +461,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         gl.deleteTexture(this.empty);
     }
 
-    private accumulateFlat(tile: WarpTile): void {
+    private accumulateFlat(tile: WarpTile, mode: CompositeMode): void {
         this.accumulate(
             0,
             this.flat,
@@ -455,6 +471,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
             tile.width,
             tile.height,
             0,
+            mode,
         );
         this.markCoverage(tile);
     }
@@ -481,6 +498,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         width: number,
         height: number,
         minWeight: number,
+        mode: CompositeMode,
     ): void {
         const gl = this.context.gl;
         const baseV = tile.v0 >> level;
@@ -500,7 +518,7 @@ export class GpuMosaic extends MosaicGrid implements MosaicSurface {
         const program = this.programs.accumulate;
         gl.enable(gl.BLEND);
         gl.blendEquation(gl.FUNC_ADD);
-        gl.blendFunc(gl.ONE, gl.ONE);
+        gl.blendFunc(gl.ONE, mode === 'over' ? gl.ONE_MINUS_SRC_ALPHA : gl.ONE);
         for (const run of this.columnRuns(level, tile.u0 >> level, width)) {
             this.context.draw(
                 program,

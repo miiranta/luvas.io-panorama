@@ -349,7 +349,7 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
         group: 'compose',
         key: 'blend',
         label: 'Blending',
-        hint: 'Average shows ghosting; feather smooths; multiband preserves detail',
+        hint: 'Average cuts hard at the seam (ghosts without seams); feather smooths; multiband preserves detail',
         kind: 'choice',
         options: ['average', 'feather', 'multiband'],
         restage: 'compose',

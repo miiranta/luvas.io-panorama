@@ -2,6 +2,8 @@ import { BlurBackend } from './blur-backend';
 import { CanvasBox } from '../warping/canvas-box';
 import { WarpTile } from '../warping/warp-tile';
 
+export type CompositeMode = 'add' | 'over';
+
 export interface MosaicView {
     u0: number;
     v0: number;
@@ -23,9 +25,14 @@ export interface MosaicSurface {
     readonly height: number;
     readonly bands: number;
     snapshot(tile: WarpTile, step: number): TileSnapshot;
-    addFlat(tile: WarpTile): void;
-    addPyramidBands(tile: WarpTile, blur: BlurBackend): void;
-    render(useBands: boolean, overlay?: MosaicSurface | null, region?: CanvasBox | null): ImageData;
+    addFlat(tile: WarpTile, mode?: CompositeMode): void;
+    addPyramidBands(tile: WarpTile, blur: BlurBackend, mode?: CompositeMode): void;
+    render(
+        useBands: boolean,
+        overlay?: MosaicSurface | null,
+        region?: CanvasBox | null,
+        mode?: CompositeMode,
+    ): ImageData;
     boundingBox(overlay?: MosaicSurface | null): CanvasBox | null;
     coveredCount(box: CanvasBox, overlay?: MosaicSurface | null): number;
     reset(): void;

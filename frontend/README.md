@@ -22,7 +22,7 @@ use `npm run start:https` e aceite o certificado. A app só consome a câmera ao
 importação de arquivos.
 
 ```bash
-npm test -- --watch=false           # 96 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
+npm test -- --watch=false           # 102 testes unitários (Vitest), um *.spec.ts ao lado de cada etapa
 npm run typecheck                   # tipos da app, do worker, dos testes e das ferramentas
 npm run verify                      # 90 checagens numéricas contra ground truth sintético (yaw e pitch recuperados)
 npm run fakecam                     # gera /tmp/pano.y4m (varredura sintética de 72°)
@@ -187,7 +187,7 @@ Cinco etapas rodam em **WebGL2** dentro do worker, todas num único contexto com
 | etapa | shader | conferência contra a CPU |
 |---|---|---|
 | warp | raio da tela → câmera → distorção κ₁ → amostragem com **mipmaps** (bicúbica no nível 0, bilinear nos demais) → ganho RGB e vinheta; saída RGBA8 | erro médio < 1,5 nível de cinza, máscara < 0,02 |
-| mosaico | acumuladores em texturas `RGBA32F` com mistura aditiva (`EXT_float_blend`): redução da pirâmide, bandas laplacianas acumuladas na resolução de cada nível, reconstrução, amostras para a costura | renders e amostras iguais à CPU (média < 0,75, máximo ≤ 6), inclusive numa janela que cruza a emenda de 360° |
+| mosaico | acumuladores em texturas `RGBA32F` com mistura aditiva ou `over` (`ONE, ONE_MINUS_SRC_ALPHA`; `EXT_float_blend`): redução da pirâmide, bandas laplacianas acumuladas na resolução de cada nível, reconstrução, amostras para a costura | renders (multibanda e plano) e amostras iguais à CPU (média < 0,75, máximo ≤ 6), nos modos aditivo e `over` com camada de prévia, inclusive numa janela que cruza a emenda de 360° |
 | pirâmide da mistura | redução binomial 5×5 com decimação por 2 em `RGBA32F` (cor·m e m), `texelFetch` | erro médio < 0,75 |
 | detecção | gaussiana σ_d → Sobel → produtos `Ix², Iy², IxIy` → gaussiana σ_i → Harris / Shi-Tomasi | pico ±5 %, erro médio ≤ 1 % do pico |
 | casamento | força bruta em Hamming com `popcount` em `RGBA32UI`, melhor e segundo melhor por descritor | igual bit a bit |
@@ -243,6 +243,17 @@ Dijkstra multi-fonte a partir dos núcleos exclusivos de cada lado, com custo po
 diferença passa do limiar, o pixel é atribuído a uma única fonte em vez de misturado — é a
 "detecção de pixels inconsistentes" da Etapa 6.3, e é o que impede o objeto móvel de aparecer
 duplicado.
+
+A costura só vale se os **dois** lados obedecem a ela. A máscara da foto nova vai a zero do lado
+do mosaico, mas os acumuladores já guardam o mosaico com peso cheio do lado da foto nova; somando
+por cima, aquele lado saía como média 50/50 das duas fotos — qualquer resíduo de alinhamento ou
+paralaxe virava um fantasma. Por isso, com a costura ligada, cada bloco é composto **por cima**
+(`over`, `CompositeMode`): em cada banda e no plano, o que já está lá é multiplicado por `1 − m`
+antes de somar `m·cor`, com `m` a máscara da foto nova naquele nível (a pirâmide da máscara dá a
+transição suave da multibanda). A prévia ao vivo segue a mesma regra ao juntar as camadas —
+`prévia + mosaico·(1 − peso da prévia)` — e a exportação compõe as fotos na mesma ordem em que
+planejou as costuras. Sem costura (`seam` desligado), a soma normalizada continua: feather e
+average voltam a ser médias ponderadas, como nos livros.
 
 ## Arquitetura
 
@@ -419,8 +430,8 @@ Cada arquivo tem uma responsabilidade só; o nome do arquivo é o do método ou 
 - `seams/seam-finder.ts` — costura de menor custo e rampa a partir dela.
 - `blending/gaussian-pyramid.ts` — reduzir/expandir; `mosaic-surface.ts` — contrato de um mosaico;
   `mosaic-grid.ts` — janela na tela, emenda de 360°, cobertura e retratos; `cpu-mosaic.ts`,
-  `gpu-mosaic.ts` — acumuladores multibanda e planos; `blend-tile.ts` — soma um bloco conforme o
-  modo de mistura; `blur-backend.ts` — pirâmide na GPU; `mosaic-backend.ts` — calibração do mosaico
+  `gpu-mosaic.ts` — acumuladores multibanda e planos; `blend-tile.ts` — compõe um bloco conforme o
+  modo de mistura (soma, ou `over` quando há costura); `blur-backend.ts` — pirâmide na GPU; `mosaic-backend.ts` — calibração do mosaico
   de GPU para o `BackendSelector`.
 - `export/panorama-exporter.ts` — exportação em blocos com costura global; `png-writer.ts` — PNG em fluxo.
 

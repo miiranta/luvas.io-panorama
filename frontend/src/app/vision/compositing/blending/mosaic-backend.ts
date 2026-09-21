@@ -1,5 +1,5 @@
 import { CpuMosaic } from './cpu-mosaic';
-import { MosaicSurface, MosaicView } from './mosaic-surface';
+import { CompositeMode, MosaicSurface, MosaicView } from './mosaic-surface';
 import { WarpTile } from '../warping/warp-tile';
 import { cpuBlurBackend } from './blur-backend';
 import {
@@ -45,17 +45,25 @@ function syntheticTile(
     return { u0, v0, width, height, color, mask, pixels: width * height };
 }
 
-function compose(surface: MosaicSurface, tiles: readonly WarpTile[]): number[] {
+function compose(
+    surface: MosaicSurface,
+    overlay: MosaicSurface | null,
+    tiles: readonly WarpTile[],
+    mode: CompositeMode,
+): number[] {
     const values: number[] = [];
-    for (const tile of tiles) {
+    tiles.forEach((tile, index) => {
         const snapshot = surface.snapshot(tile, 4);
         for (let i = 0; i < snapshot.filled.length; i++) {
             values.push(snapshot.filled[i] ? snapshot.mean[i * 3] : -1);
         }
-        surface.addPyramidBands(tile, cpuBlurBackend);
+        const target = overlay && index === tiles.length - 1 ? overlay : surface;
+        target.addPyramidBands(tile, cpuBlurBackend, mode);
+    });
+    for (const useBands of [true, false]) {
+        const rendered = surface.render(useBands, overlay, null, mode).data;
+        for (let i = 0; i < rendered.length; i++) values.push(rendered[i]);
     }
-    const rendered = surface.render(true, null, null).data;
-    for (let i = 0; i < rendered.length; i++) values.push(rendered[i]);
     return values;
 }
 
@@ -96,6 +104,16 @@ class RoutedMosaicMaker extends RoutedBackend<MosaicMaker> implements MosaicMake
     }
 }
 
+interface ComposeVariant {
+    mode: CompositeMode;
+    layered: boolean;
+}
+
+const COMPOSE_VARIANTS: readonly ComposeVariant[] = [
+    { mode: 'add', layered: false },
+    { mode: 'over', layered: true },
+];
+
 interface AgreementCase {
     width: number;
     height: number;
@@ -129,12 +147,16 @@ function composeWith(
     width: number,
     height: number,
     tiles: readonly WarpTile[],
+    variant: ComposeVariant,
     view?: MosaicView,
 ): number[] | null {
     const surface = maker.create(width, height, CHECK_BANDS, view);
     if (!surface) return null;
-    const values = compose(surface, tiles);
+    const overlay = variant.layered ? maker.create(width, height, CHECK_BANDS, view) : null;
+    const values =
+        variant.layered && !overlay ? null : compose(surface, overlay, tiles, variant.mode);
     surface.dispose();
+    overlay?.dispose();
     return values;
 }
 
@@ -144,17 +166,22 @@ const mosaicCalibration: Calibration<MosaicMaker> = {
     timingRuns: 1,
     createGpu: (context) => (context.blendsFloat ? new GpuMosaicMaker(context) : null),
     agrees(gpu, cpu) {
-        return AGREEMENT_CASES.every(({ width, height, view, tiles }) => {
-            const expected = composeWith(cpu, width, height, tiles(), view);
-            const actual = composeWith(gpu, width, height, tiles(), view);
-            return expected !== null && actual !== null && closeEnough(expected, actual);
-        });
+        return AGREEMENT_CASES.every(({ width, height, view, tiles }) =>
+            COMPOSE_VARIANTS.every((variant) => {
+                const expected = composeWith(cpu, width, height, tiles(), variant, view);
+                const actual = composeWith(gpu, width, height, tiles(), variant, view);
+                return expected !== null && actual !== null && closeEnough(expected, actual);
+            }),
+        );
     },
     run: (maker) =>
-        composeWith(maker, TIMING_WIDTH, TIMING_HEIGHT, [
-            syntheticTile(0, 0, 768, 576, 0),
-            syntheticTile(384, 256, 768, 576, 1),
-        ]) !== null,
+        composeWith(
+            maker,
+            TIMING_WIDTH,
+            TIMING_HEIGHT,
+            [syntheticTile(0, 0, 768, 576, 0), syntheticTile(384, 256, 768, 576, 1)],
+            { mode: 'over', layered: false },
+        ) !== null,
     route: (gpu, cpu, threshold) => new RoutedMosaicMaker(gpu, cpu, threshold),
     describeWorkload: () => `${TIMING_WIDTH}×${TIMING_HEIGHT}`,
 };
